@@ -2,6 +2,7 @@
   "scripts": {
     "build": "node scripts/build.mjs",
     "dev": "node scripts/serve.mjs dist 4173",
+    "verify:deploy-parity": "npm run build && node scripts/verify-deploy-parity.mjs ../Sakauma.github.io",
     "deploy:local": "npm run build && node scripts/deploy-local.mjs ../Sakauma.github.io"
   },
   "devDependencies": {}
