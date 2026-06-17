@@ -1,0 +1,8 @@
+{
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "dev": "node scripts/serve.mjs dist 4173",
+    "deploy:local": "npm run build && node scripts/deploy-local.mjs ../Sakauma.github.io"
+  },
+  "devDependencies": {}
+}
