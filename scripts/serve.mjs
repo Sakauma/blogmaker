@@ -28,6 +28,7 @@ createServer((req, res) => {
     res.end("Forbidden");
     return;
   }
+  if (existsSync(file) && statSync(file).isDirectory()) file = join(file, "index.html");
   if (!existsSync(file)) file = join(file, "index.html");
   if (!existsSync(file) || statSync(file).isDirectory()) file = join(root, "404.html");
   res.setHeader("Content-Type", types[extname(file).toLowerCase()] || "application/octet-stream");
