@@ -1,6 +1,12 @@
-# Sakauma site source
+# Sakauma blogmaker
 
-这是 Sakauma 个人站的源码仓库。现有 `Sakauma.github.io` 继续作为部署产物仓库；这个仓库用于写作、维护模板和运行 npm build。
+`blogmaker` 是 Sakauma 站点的源码/构建仓库。`Sakauma.github.io` 继续作为部署仓库，只保存编译后的静态文件。
+
+当前目标是先建立一个和现有发布仓库字节级一致的构建基线：
+
+- `src/publish-snapshot/` 保存当前 `Sakauma.github.io` 的完整发布快照。
+- `npm run build` 会把该快照复制到 `dist/`。
+- 这样现有首页、文章页、分页、归档、标签、分类、`recent-updates`、中文目录路径都会原样生成。
 
 ## 常用命令
 
@@ -10,9 +16,11 @@ npm run dev
 npm run deploy:local
 ```
 
-## 新增博客
+## 新增博客源文件
 
-在 `content/posts/` 新建 Markdown 文件：
+现有 70 篇文章已经抽取到 `content/posts/*.md`，方便后续编辑和继续演进生成器。
+
+新增博客时，可以先按这个格式添加 Markdown：
 
 ```markdown
 ---
@@ -28,19 +36,19 @@ tags:
 正文内容。
 ```
 
-然后运行 `npm run build`。生成结果在 `dist/`。
+注意：当前版本优先保证“现有发布站完全一致生成”。新增文章的自动索引更新会在这个基线稳定后继续接入。
 
 ## 部署结构
 
-- 源码仓库：本仓库，保存 Markdown、模板、构建脚本。
-- 发布仓库：`git@github.com:Sakauma/Sakauma.github.io.git`，只保存 npm build 后的静态文件。
+- 源码仓库：`git@github.com:Sakauma/blogmaker.git`
+- 发布仓库：`git@github.com:Sakauma/Sakauma.github.io.git`
 
-本地部署可运行：
+本地部署命令：
 
 ```bash
 npm run deploy:local
 ```
 
-它会把 `dist/` 同步到相邻的 `../Sakauma.github.io` 发布仓库并提交。
+它会先执行 `npm run build`，再把 `dist/` 同步到相邻的 `../Sakauma.github.io` 发布仓库并推送。
 
 GitHub Actions 自动部署需要在源码仓库配置一个可写入 `Sakauma/Sakauma.github.io` 的 secret：`DEPLOY_KEY`。
