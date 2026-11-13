@@ -156,6 +156,21 @@ button { border: 0; background: none; padding: 0; }
 .ascii-animation { max-width: 100%; color: var(--accent); width: 700px; padding-block: 6px; }
 .ascii-animation pre { margin: 0; font: 13px/1.12 var(--mono); letter-spacing: 0; white-space: pre; }
 .ascii-caption { color: var(--muted); font-size: 11px; margin-top: 14px; }
+/* Paging is explicit: ordinary output continues to use document scrolling. */
+html[data-pager-active='true'] #terminal-log > :not(.pager-entry),
+html[data-pager-active='true'] .keyboard-help { display: none; }
+html[data-pager-active='true'] #scrollback { padding-bottom: 18px; }
+.pager-entry { margin-bottom: 0; }
+.pager { min-width: 0; }
+.pager:focus { outline: none; }
+.pager-label { color: var(--accent); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pager-controls { display: flex; flex-wrap: wrap; gap: 8px 24px; margin: 4px 0; color: var(--path); }
+.pager-controls button { min-height: 32px; }
+.pager-controls button:disabled { cursor: default; color: var(--muted); opacity: .5; text-decoration: none; }
+.pager-status { font-size: 12px; color: var(--accent); min-height: 21px; }
+.pager-help { font-size: 11px; margin-bottom: 12px; }
+.pager-window { overflow: clip; min-width: 0; }
+.pager-content { position: relative; line-height: inherit; transform-origin: top left; }
 @keyframes cursor-blink { 0%, 49% { opacity: 1; } 50%, 100% { opacity: 0; } }
 @media (min-width: 1600px) { body { font-size: 15px; } #terminal-screen { width: 1200px; } }
 @media (max-width: 900px) {

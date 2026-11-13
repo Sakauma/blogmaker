@@ -31,6 +31,9 @@
 - 保留 `/list/index-1.html`、`/index/`、根分页、各年月归档、标签/分类分页、最近更新分页及 `404.html`。
 - JavaScript 成功初始化后移除 `#site-fallback`；初始化失败或禁用时显示原文与导航。历史脚本不放入回退内容执行。
 - Node/npm lock 是本仓库的依赖基线；依赖变更同时更新 `package.json` 与 `package-lock.json`。
+- 普通命令保持整页滚动；仅 `more` / `less` 启用分页。`pager.ts` 使用真实换行高度与 `overflow: clip`，保留原始文档行、链接和 Unicode，不引入第二条滚动条；退出和浏览器导航时恢复普通输入状态。
+- `shell.ts` 同步解释并先验证整条管道；末端分页器可以产生 `pager` 效果，其他状态命令独立运行。文档直接执行产生 `document` 效果，进入管道时只输出正文。
+- `editor.ts` 的 Ctrl 编辑键仅在命令输入框生效，按 Unicode 字素移动/删除；IME 与选区复制保留原行为。
 - 团队并行编辑时分开 terminal、生成器、测试与发布范围；提交前审阅完整差异并跑相应检查。
 
 ## 部署说明

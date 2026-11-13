@@ -1,7 +1,7 @@
 import { resolve } from 'node:path';
 import { test as base, expect, type Locator, type Page } from '@playwright/test';
 import { manifest, posts, profile, projectFiles, routes } from '../src/content';
-import { basename, chinesePost, directoryNames, fileText, legacySourceFilenames, longestPost, originalTextRuns, poemPost, preformattedPoems, quote, russianPost, sortedPostNames, sourceForFile, sourcePosts, visibleFileLines } from './content-fixtures';
+import { basename, chinesePost, directoryNames, fileLines, fileText, legacySourceFilenames, longestPost, originalTextRuns, poemPost, preformattedPoems, quote, russianPost, sortedPostNames, sourceForFile, sourcePosts, visibleContentLine, visibleFileLines } from './content-fixtures';
 
 const DESKTOP = { width: 1440, height: 1000 };
 const MOBILE = { width: 390, height: 844 };
@@ -198,6 +198,113 @@ async function screenshot(page: Page, name: 'desktop' | 'mobile' | 'session' | '
     caret: 'hide',
     scale: 'css',
   });
+}
+
+type PagerMode = 'less' | 'more';
+interface PagerPosition { start: number; end: number; total: number; atEnd: boolean }
+const pager = (page: Page): Locator => page.locator('.pager[role="region"]');
+const pagerContent = (page: Page): Locator => pager(page).locator('.pager-content');
+// The pager retains one original DOM row per source line. It translates the
+// complete text and hides rows outside the viewport; a wrapped source line can
+// remain visible across consecutive pages without being split or rewritten.
+const pagerRows = (page: Page): Locator => pagerContent(page).locator(':scope > .output-line:visible');
+const pagerPrevious = (page: Page): Locator => pager(page).getByRole('button', { name: '上一页', exact: true });
+const pagerNext = (page: Page): Locator => pager(page).getByRole('button', { name: '下一页', exact: true });
+const pagerClose = (page: Page): Locator => pager(page).getByRole('button', { name: '退出分页', exact: true });
+
+async function pagerPosition(page: Page): Promise<PagerPosition> {
+  const text = await pager(page).locator('.pager-status').innerText();
+  const match = text.match(/(\d+)\s*–\s*(\d+)\s*\/\s*(\d+)\s*行/);
+  expect(match, `分页状态应报告原文行号：${text}`).not.toBeNull();
+  return { start: Number(match![1]), end: Number(match![2]), total: Number(match![3]), atEnd: /\bEND\b/.test(text) };
+}
+
+async function startPager(page: Page, command: string, mode: PagerMode): Promise<void> {
+  await input(page).fill(command);
+  await input(page).press('Enter');
+  await expect(page.locator('html')).toHaveAttribute('data-pager-active', 'true');
+  await expect(pager(page)).toHaveCount(1);
+  await expect(pager(page)).toHaveAccessibleName(`${mode} 分页阅读`);
+  await expect(form(page)).toHaveAttribute('hidden', '');
+  await expect(form(page)).toBeHidden();
+  await expect(page.locator('#command-input')).toHaveValue('');
+  await expect(page.locator('#terminal-log > :visible')).toHaveCount(1);
+  await expect(page.locator('#terminal-log > :visible .pager')).toHaveCount(1);
+  await expect(page.locator('canvas, img, dialog')).toHaveCount(0);
+  for (const [control, className] of [
+    [pagerPrevious(page), 'pager-previous'], [pagerNext(page), 'pager-next'], [pagerClose(page), 'pager-close'],
+  ] as const) {
+    await expect(control).toHaveJSProperty('tagName', 'BUTTON');
+    await expect(control).toHaveAttribute('type', 'button');
+    await expect(control).toHaveClass(new RegExp(`\\b${className}\\b`));
+    await expectInsideViewport(page, control);
+  }
+}
+
+async function expectPagerSlice(page: Page, expected: string[]): Promise<PagerPosition> {
+  const position = await pagerPosition(page);
+  expect(await pagerContent(page).locator(':scope > .output-line').allTextContents(), '分页保留全部原文 DOM').toEqual(expected);
+  expect(position.total, '总行数来自原始内容，不能用当前页或固定文章数量代替').toBe(expected.length);
+  expect(position.start).toBeGreaterThanOrEqual(1);
+  expect(position.end).toBeGreaterThanOrEqual(position.start);
+  expect(position.end).toBeLessThanOrEqual(position.total);
+  await expect(pagerRows(page)).toHaveCount(position.end - position.start + 1);
+  expect(await pagerRows(page).allTextContents(), `可见原文 ${position.start}–${position.end}`).toEqual(
+    expected.slice(position.start - 1, position.end),
+  );
+  // The final source line may wrap over more than one screen. END means its
+  // final visual row has been reached, not merely that its DOM row is visible.
+  if (position.atEnd) {
+    expect(position.end).toBe(expected.length);
+    await expect(pagerNext(page)).toBeDisabled();
+  } else await expect(pagerNext(page)).toBeEnabled();
+  return position;
+}
+
+async function resizePager(page: Page, viewport: { width: number; height: number }): Promise<void> {
+  await page.setViewportSize(viewport);
+  // ResizeObserver schedules the pager's measurement in requestAnimationFrame.
+  // Read status and visibility only after that frame has committed, rather than
+  // retaining a pre-resize status while later DOM assertions see the new page.
+  await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+}
+
+async function expectPagerWidth(page: Page): Promise<void> {
+  await expectNoHorizontalOverflow(page);
+  for (const element of [pager(page), pagerContent(page)]) {
+    const size = await element.evaluate((node) => ({ width: node.clientWidth, scroll: node.scrollWidth }));
+    expect(size.width).toBeGreaterThan(0);
+    expect(size.scroll, '分页正文应换行而不是横向截断或滚动').toBeLessThanOrEqual(size.width + 1);
+  }
+  await expectInsideViewport(page, pager(page).locator('.pager-status'));
+  await expectInsideViewport(page, pagerPrevious(page));
+  await expectInsideViewport(page, pagerNext(page));
+  await expectInsideViewport(page, pagerClose(page));
+}
+
+async function expectPagerClosed(page: Page): Promise<void> {
+  await expect(pager(page)).toHaveCount(0);
+  await expect(page.locator('html')).not.toHaveAttribute('data-pager-active', 'true');
+  await expect(form(page)).toBeVisible();
+  await expect(log(page)).toBeVisible();
+  await expect(input(page)).toBeFocused();
+  await expectInputUsable(page);
+}
+
+async function setEditor(page: Page, value: string, start: number, end = start): Promise<void> {
+  await input(page).fill(value);
+  await input(page).evaluate((node, selection) => {
+    (node as HTMLTextAreaElement).setSelectionRange(selection.start, selection.end);
+  }, { start, end });
+}
+
+async function expectEditor(page: Page, value: string, start: number, end = start): Promise<void> {
+  await expect(input(page)).toHaveValue(value);
+  await expect.poll(() => input(page).evaluate((node) => {
+    const editor = node as HTMLTextAreaElement;
+    return [editor.selectionStart, editor.selectionEnd];
+  }), { message: '编辑操作应保留正确的 UTF-16 光标/选区，且不拆开 Unicode 字符' }).toEqual([start, end]);
+  await expect(input(page)).toBeFocused();
 }
 
 test('桌面首屏为深色纯终端，常驻命令行、滚动日志与按钮语义完整', async ({ page, pageErrors }) => {
@@ -917,6 +1024,561 @@ test('正文与左右背景空白使用同一整页滚动，标题和内容同�
   await expectNoHorizontalOverflow(page);
 });
 
+for (const mode of ['less', 'more'] as const) {
+  test(`${mode} 文件分页逐行保留真实诗文、缩进与链接，退出恢复会话且 cat 仍展开全文`, async ({ page }) => {
+    await page.setViewportSize({ width: 1100, height: 620 });
+    await visit(page);
+    await runCommand(page, 'echo retained-before-reading');
+    const expected = visibleFileLines(poemPost.file);
+    await startPager(page, `${mode} ${quote(poemPost.file)}`, mode);
+    const first = await expectPagerSlice(page, expected);
+    expect(first.start).toBe(1);
+    expect(first.end).toBeLessThan(expected.length);
+    await expect(pagerPrevious(page)).toBeDisabled();
+    const originalRoutes = await pagerContent(page).locator('a[data-route]').evaluateAll(nodes =>
+      nodes.map(node => decodeURIComponent(node.getAttribute('href') ?? '')));
+    expect(originalRoutes, '原文路由链接保留在分页正文').toContain(poemPost.path);
+    const rendered = await pagerContent(page).locator(':scope > .output-line').allTextContents();
+    const indented = rendered.findIndex(line => /^ {2,}\S/.test(line));
+    expect(indented, '沿用包含 PRE 缩进的原诗 fixture').toBeGreaterThanOrEqual(0);
+    expect(await pagerContent(page).locator(':scope > .output-line').nth(indented).evaluate(node => getComputedStyle(node).whiteSpace))
+      .toMatch(/^(pre|pre-wrap|break-spaces)$/);
+    const seen = new Map<number, string>();
+    let position = first;
+    for (let step = 0; step < expected.length; step += 1) {
+      const visible = await pagerRows(page).allTextContents();
+      visible.forEach((text, index) => seen.set(position.start - 1 + index, text));
+      await expectPagerWidth(page);
+      if (position.atEnd) break;
+      const previous = position;
+      await pagerNext(page).click();
+      await expect.poll(async () => (await pagerPosition(page)).start).toBeGreaterThan(previous.start);
+      position = await expectPagerSlice(page, expected);
+      expect(position.start, '相邻页可以重叠，原文行不能跳过').toBeLessThanOrEqual(previous.end + 1);
+    }
+    expect(position.atEnd, '有限次翻页应抵达真实全文末尾').toBe(true);
+    expect([...seen.entries()].sort(([a], [b]) => a - b).map(([, text]) => text)).toEqual(expected);
+    await page.keyboard.press('q');
+    await expectPagerClosed(page);
+    await expect(log(page)).toContainText('retained-before-reading');
+    await expect(output(page)).toHaveText(/\S/);
+    await expect(output(page)).toContainText(/less|more|阅读|分页/);
+    expect(await output(page).locator(':scope > .output-line').count(), '退出只保留简短阅读状态').toBeLessThan(8);
+    await runCommand(page, `cat ${quote(poemPost.file)}`);
+    await expectFile(output(page), poemPost.file);
+    await expect(pager(page)).toHaveCount(0);
+    await expectInputUsable(page);
+  });
+
+  test(`${mode} 位于管道末端时分页显示实际目录结果，最终一页保持满页`, async ({ page }) => {
+    await page.setViewportSize({ width: 1100, height: 520 });
+    await visit(page);
+    const originalURL = page.url();
+    const expected = directoryNames('/posts');
+    await startPager(page, `ls /posts | ${mode}`, mode);
+    const first = await expectPagerSlice(page, expected);
+    expect(first.start).toBe(1);
+    expect(first.end).toBeLessThan(expected.length);
+    await page.keyboard.press('G');
+    await expect(pager(page).locator('.pager-status')).toContainText('END');
+    const last = await expectPagerSlice(page, expected);
+    expect(last.end).toBe(expected.length);
+    expect(last.end - last.start + 1, '等高目录行的尾页应向前补齐，可与上一页重叠').toBe(first.end - first.start + 1);
+    await expect(pagerRows(page).last()).toHaveText(expected.at(-1)!);
+    await expect(page).toHaveURL(originalURL);
+    await pagerClose(page).click();
+    await expectPagerClosed(page);
+  });
+}
+
+test('分页键 Space/PageDown/f 与 b/PageUp 按实际可视页前后移动，g/G 回首尾', async ({ page }) => {
+  await page.setViewportSize({ width: 1100, height: 520 });
+  await visit(page);
+  const expected = directoryNames('/posts');
+  await startPager(page, 'ls /posts | less', 'less');
+  const first = await expectPagerSlice(page, expected);
+  for (const [forward, backward] of [['Space', 'b'], ['PageDown', 'PageUp'], ['f', 'b']] as const) {
+    await page.keyboard.press(forward);
+    await expect.poll(async () => (await pagerPosition(page)).start).toBeGreaterThan(first.start);
+    const next = await expectPagerSlice(page, expected);
+    expect(next.start).toBeGreaterThanOrEqual(first.end - 1);
+    expect(next.start).toBeLessThanOrEqual(first.end + 1);
+    await page.keyboard.press(backward);
+    await expect.poll(async () => (await pagerPosition(page)).start).toBe(1);
+    expect(await expectPagerSlice(page, expected)).toEqual(first);
+  }
+  await page.keyboard.press('G');
+  await expect(pager(page).locator('.pager-status')).toContainText('END');
+  await expectPagerSlice(page, expected);
+  await page.keyboard.press('g');
+  await expect.poll(async () => (await pagerPosition(page)).start).toBe(1);
+  expect(await expectPagerSlice(page, expected)).toEqual(first);
+  await expect(pagerPrevious(page)).toBeDisabled();
+  for (const key of ['b', 'PageUp', 'k', 'ArrowUp', 'Control+u']) {
+    await page.keyboard.press(key);
+    expect(await expectPagerSlice(page, expected)).toEqual(first);
+  }
+});
+
+test('分页键 j/k、方向键与 Enter 移一行，Ctrl+D/U 移半页', async ({ page }) => {
+  await page.setViewportSize({ width: 1100, height: 620 });
+  await visit(page);
+  const expected = directoryNames('/posts');
+  await startPager(page, 'ls /posts | less', 'less');
+  const first = await expectPagerSlice(page, expected);
+  let start = 1;
+  for (const key of ['j', 'ArrowDown', 'Enter']) {
+    await page.keyboard.press(key);
+    start += 1;
+    await expect.poll(async () => (await pagerPosition(page)).start).toBe(start);
+    await expectPagerSlice(page, expected);
+  }
+  for (const key of ['k', 'ArrowUp']) {
+    await page.keyboard.press(key);
+    start -= 1;
+    await expect.poll(async () => (await pagerPosition(page)).start).toBe(start);
+    await expectPagerSlice(page, expected);
+  }
+  await page.keyboard.press('g');
+  await expect.poll(async () => (await pagerPosition(page)).start).toBe(1);
+  await page.keyboard.press('Control+d');
+  await expect.poll(async () => (await pagerPosition(page)).start).toBeGreaterThan(1);
+  const half = await expectPagerSlice(page, expected);
+  const visibleLines = first.end - first.start + 1;
+  expect(half.start - first.start).toBeGreaterThanOrEqual(Math.floor(visibleLines / 2) - 1);
+  expect(half.start - first.start).toBeLessThanOrEqual(Math.ceil(visibleLines / 2) + 1);
+  await page.keyboard.press('Control+u');
+  await expect.poll(async () => (await pagerPosition(page)).start).toBe(1);
+  expect(await expectPagerSlice(page, expected)).toEqual(first);
+  await expect(form(page)).toBeHidden();
+});
+
+for (const key of ['Space', 'PageDown', 'f'] as const) {
+  test(`分页已到 END 时 ${key} 退出并恢复可用提示符`, async ({ page }) => {
+    await visit(page);
+    await startPager(page, `less ${quote(poemPost.file)}`, 'less');
+    await page.keyboard.press('G');
+    await expect(pager(page).locator('.pager-status')).toContainText('END');
+    await expect(pagerNext(page)).toBeDisabled();
+    await page.keyboard.press(key);
+    await expectPagerClosed(page);
+    await runCommand(page, 'echo eof-prompt-restored');
+    await expect(output(page)).toHaveText('eof-prompt-restored');
+  });
+}
+
+for (const key of ['q', 'Escape', 'Control+c'] as const) {
+  test(`分页中的 ${key} 立即退出，之前的会话和主题保持`, async ({ page }) => {
+    await visit(page);
+    await runCommand(page, 'theme amber');
+    await runCommand(page, 'echo before-pager-interrupt');
+    await startPager(page, `more ${quote(poemPost.file)}`, 'more');
+    await page.keyboard.press(key);
+    await expectPagerClosed(page);
+    await expectTheme(page, 'amber');
+    await expect(log(page)).toContainText('before-pager-interrupt');
+    await runCommand(page, 'echo after-pager-interrupt');
+    await expect(output(page)).toHaveText('after-pager-interrupt');
+  });
+}
+
+test('分页正文已选中文本时 Ctrl+C 保持原生复制，清除选区后可退出', async ({ page }) => {
+  await visit(page);
+  await startPager(page, `less ${quote(poemPost.file)}`, 'less');
+  const selection = await pagerRows(page).first().evaluate((node) => {
+    const range = document.createRange();
+    range.selectNodeContents(node);
+    const selected = window.getSelection()!;
+    selected.removeAllRanges();
+    selected.addRange(range);
+    const copyProbe = (event: KeyboardEvent): void => {
+      if (event.ctrlKey && event.key.toLowerCase() === 'c') {
+        Reflect.set(window, '__pagerCopyPrevented', event.defaultPrevented);
+        document.removeEventListener('keydown', copyProbe);
+      }
+    };
+    document.addEventListener('keydown', copyProbe);
+    return selected.toString();
+  });
+  expect(selection).not.toBe('');
+  await page.keyboard.press('Control+c');
+  await expect(page.locator('html')).toHaveAttribute('data-pager-active', 'true');
+  expect(await page.evaluate(() => window.getSelection()?.toString())).toBe(selection);
+  expect(await page.evaluate(() => Reflect.get(window, '__pagerCopyPrevented'))).toBe(false);
+  await page.evaluate(() => window.getSelection()?.removeAllRanges());
+  await page.keyboard.press('Control+c');
+  await expectPagerClosed(page);
+});
+
+test('分页会随高度与320px宽度重新计算，换行正文和操作按钮保持可读', async ({ page }) => {
+  await page.setViewportSize(DESKTOP);
+  await visit(page);
+  const expected = visibleFileLines(poemPost.file);
+  await startPager(page, `less ${quote(poemPost.file)}`, 'less');
+  const tall = await expectPagerSlice(page, expected);
+  await page.screenshot({ path: resolve(__dirname, '../../artifacts/desktop-pager.png'), fullPage: false, animations: 'disabled', caret: 'hide', scale: 'css' });
+  await resizePager(page, { width: 1100, height: 460 });
+  await expect.poll(async () => (await pagerPosition(page)).end).toBeLessThan(tall.end);
+  const short = await expectPagerSlice(page, expected);
+  expect(short.start).toBe(1);
+  await expectPagerWidth(page);
+  await resizePager(page, { width: 320, height: 740 });
+  await expect.poll(() => pager(page).evaluate(node => node.getBoundingClientRect().width)).toBeLessThanOrEqual(320);
+  await expectPagerSlice(page, expected);
+  await expectPagerWidth(page);
+  await page.keyboard.press('G');
+  await expect(pager(page).locator('.pager-status')).toContainText('END');
+  await expectPagerSlice(page, expected);
+  await expectPagerWidth(page);
+  await resizePager(page, { width: 1100, height: 860 });
+  await expectPagerSlice(page, expected);
+  await expectPagerWidth(page);
+  await pagerClose(page).click();
+  await expectPagerClosed(page);
+});
+
+test('320px长段落跨页连续平移，完整原文不截短且无水平溢出', async ({ page }) => {
+  await page.setViewportSize({ width: 320, height: 600 });
+  await visit(page);
+  const expected = visibleFileLines(longestPost.file);
+  const longestIndex = expected.reduce((best, line, index) => line.length > expected[best].length ? index : best, 0);
+  await startPager(page, `less ${quote(longestPost.file)}`, 'less');
+  const longRow = pagerContent(page).locator(':scope > .output-line').nth(longestIndex);
+  expect(await longRow.textContent()).toBe(expected[longestIndex]);
+  let found = false;
+  for (let step = 0; step < expected.length * 2; step += 1) {
+    const position = await expectPagerSlice(page, expected);
+    if (position.start <= longestIndex + 1 && position.end >= longestIndex + 1) {
+      found = true;
+      break;
+    }
+    expect(position.atEnd, '长段落必须在 END 之前出现').toBe(false);
+    await pagerNext(page).click();
+  }
+  expect(found, '分页应实际到达 fixture 中的长段落').toBe(true);
+  await expect(longRow).toBeVisible();
+  const before = await longRow.boundingBox();
+  expect(before!.height, '所选真实长段落必须产生跨屏换行').toBeGreaterThan(page.viewportSize()!.height);
+  await pagerNext(page).click();
+  await expect(longRow).toBeVisible();
+  await expect.poll(async () => (await longRow.boundingBox())!.y).toBeLessThan(before!.y);
+  expect(await longRow.textContent()).toBe(expected[longestIndex]);
+  await expectPagerSlice(page, expected);
+  await expectPagerWidth(page);
+  await resizePager(page, { width: 768, height: 900 });
+  await expectPagerSlice(page, expected);
+  await expectPagerWidth(page);
+  await page.keyboard.press('G');
+  await expect(pager(page).locator('.pager-status')).toContainText('END');
+  await expectPagerSlice(page, expected);
+});
+
+test('分页中的真实站内链接退出阅读并同页展开原文，前进后退保留旧路由', async ({ page }) => {
+  const response = await page.goto('/list/');
+  expect(response?.ok()).toBe(true);
+  await waitForPage(page);
+  const marker = await page.evaluate(() => {
+    const value = crypto.randomUUID();
+    Reflect.set(window, '__pagerDocumentMarker', value);
+    return value;
+  });
+  await startPager(page, 'less /posts/index.md', 'less');
+  await expectPagerSlice(page, visibleFileLines('/posts/index.md'));
+  const links = await pagerContent(page).locator('a[data-route]:visible').evaluateAll(nodes => nodes.map(node => ({
+    title: node.textContent, path: decodeURIComponent((node as HTMLAnchorElement).pathname),
+  })));
+  const linkedPost = posts.find(post => links.some(link => link.path === post.path));
+  expect(linkedPost, '索引第一页必须包含真实文章链接').toBeDefined();
+  await pagerContent(page).getByRole('link', { name: linkedPost!.title, exact: true }).click();
+  await expect(pager(page)).toHaveCount(0);
+  await expect(page.locator('html')).not.toHaveAttribute('data-pager-active', 'true');
+  await expect(form(page)).toBeVisible();
+  await expectFile(output(page), linkedPost!.file);
+  expect(decodeURIComponent(new URL(page.url()).pathname)).toBe(linkedPost!.path);
+  expect(await page.evaluate(() => Reflect.get(window, '__pagerDocumentMarker'))).toBe(marker);
+  await page.goBack();
+  await expectFile(output(page), '/posts/index.md');
+  expect(new URL(page.url()).pathname).toBe('/list/');
+  await expect(pager(page)).toHaveCount(0);
+  await page.goForward();
+  await expectFile(output(page), linkedPost!.file);
+  expect(decodeURIComponent(new URL(page.url()).pathname)).toBe(linkedPost!.path);
+  expect(await page.evaluate(() => Reflect.get(window, '__pagerDocumentMarker'))).toBe(marker);
+});
+
+for (const action of ['home', 'exit', 'Control+d'] as const) {
+  test(`${action} 回首页同步URL和根目录，保留主题、真实历史与浏览器后退`, async ({ page }) => {
+    await page.goto(encodeURI(`${russianPost.path}index.html`));
+    await waitForPage(page);
+    await runCommand(page, 'theme amber');
+    await runCommand(page, 'cd /posts');
+    await runCommand(page, 'echo history-survives-home');
+    await expect(output(page)).toHaveText('history-survives-home');
+    await expect(page.locator('#prompt-path')).toHaveText('~/posts');
+    const previousURL = page.url();
+    const marker = await page.evaluate(() => {
+      const value = crypto.randomUUID();
+      Reflect.set(window, '__homeDocumentMarker', value);
+      return value;
+    });
+    if (action === 'Control+d') {
+      await input(page).fill('');
+      await input(page).press(action);
+    } else await runCommand(page, action);
+    await expect.poll(() => new URL(page.url()).pathname).toBe('/');
+    await expect(page.locator('#prompt-path')).toHaveText('~');
+    await expect(log(page).locator('.ascii-logo')).toHaveCount(1);
+    const listing = log(page).locator('.entry[data-command-line="ls"] > .output');
+    for (const name of directoryNames('/')) await expect(listing).toContainText(name);
+    await expectTheme(page, 'amber');
+    await expectInputUsable(page);
+    expect(await page.evaluate(() => Reflect.get(window, '__homeDocumentMarker'))).toBe(marker);
+    await runCommand(page, 'pwd');
+    await expect(output(page)).toHaveText('/');
+    await runCommand(page, 'history');
+    for (const command of ['theme amber', 'cd /posts', 'echo history-survives-home']) {
+      await expect(output(page).getByRole('button', { name: new RegExp(`${command}$`) })).toHaveCount(1);
+    }
+    await output(page).getByRole('button', { name: /echo history-survives-home$/ }).click();
+    await expect(output(page)).toHaveText('history-survives-home');
+    await page.goBack();
+    await expect(page).toHaveURL(previousURL);
+    await expectFile(output(page), russianPost.file);
+    await page.goForward();
+    await expect.poll(() => new URL(page.url()).pathname).toBe('/');
+    await expect(page.locator('#prompt-path')).toHaveText('~');
+    await expectTheme(page, 'amber');
+    expect(await page.evaluate(() => Reflect.get(window, '__homeDocumentMarker'))).toBe(marker);
+  });
+}
+
+test('Ctrl+A/E 定位当前逻辑行首尾，Ctrl+K/U 删除行内文字并保留其他行', async ({ page }) => {
+  await visit(page);
+  const prefix = 'first line\n';
+  const middle = 'ab😀中文 tail';
+  const value = `${prefix}${middle}\nlast line`;
+  const caret = prefix.length + 'ab😀'.length;
+  await setEditor(page, value, caret);
+  await input(page).press('Control+a');
+  await expectEditor(page, value, prefix.length);
+  await input(page).press('Control+e');
+  await expectEditor(page, value, prefix.length + middle.length);
+  await setEditor(page, value, caret);
+  await input(page).press('Control+k');
+  await expectEditor(page, `${prefix}ab😀\nlast line`, caret);
+  await setEditor(page, value, caret);
+  await input(page).press('Control+u');
+  await expectEditor(page, `${prefix}中文 tail\nlast line`, prefix.length);
+});
+
+test('Ctrl+B/F 按 Unicode 字素移动光标，组合重音和emoji序列保持完整', async ({ page }) => {
+  await visit(page);
+  const value = '甲😀𠮷е́👩‍💻Z';
+  const boundaries = [0, 1, 3, 5, 7, 12, 13];
+  await setEditor(page, value, value.length);
+  for (const position of [...boundaries].reverse().slice(1)) {
+    await input(page).press('Control+b');
+    await expectEditor(page, value, position);
+  }
+  await input(page).press('Control+b');
+  await expectEditor(page, value, 0);
+  for (const position of boundaries.slice(1)) {
+    await input(page).press('Control+f');
+    await expectEditor(page, value, position);
+  }
+  await input(page).press('Control+f');
+  await expectEditor(page, value, value.length);
+  await setEditor(page, value, 1, 5);
+  await input(page).press('Control+b');
+  await expectEditor(page, value, 1);
+  await setEditor(page, value, 1, 5);
+  await input(page).press('Control+f');
+  await expectEditor(page, value, 5);
+});
+
+test('非空输入的 Ctrl+D 删除选区或下一个 Unicode 字符，行尾不跳回首页', async ({ page }) => {
+  await page.goto(encodeURI(chinesePost.path));
+  await waitForPage(page);
+  await runCommand(page, 'cd /posts');
+  const articleURL = page.url();
+  await setEditor(page, 'A😀𠮷中Z', 1);
+  await input(page).press('Control+d');
+  await expectEditor(page, 'A𠮷中Z', 1);
+  await input(page).press('Control+d');
+  await expectEditor(page, 'A中Z', 1);
+  await setEditor(page, 'A😀中𠮷Z', 1, 'A😀中𠮷'.length);
+  await input(page).press('Control+d');
+  await expectEditor(page, 'AZ', 1);
+  await setEditor(page, 'AZ', 2);
+  await input(page).press('Control+d');
+  await expectEditor(page, 'AZ', 2);
+  await expect(page).toHaveURL(articleURL);
+  await expect(page.locator('#prompt-path')).toHaveText('~/posts');
+});
+
+test('Ctrl+W 删除光标前一词和分隔空白，保留后面的未选中草稿', async ({ page }) => {
+  await visit(page);
+  const value = 'echo 中😀  tail';
+  await setEditor(page, value, 'echo 中😀  '.length);
+  await input(page).press('Control+w');
+  await expectEditor(page, 'echo tail', 'echo '.length);
+  await input(page).press('Control+w');
+  await expectEditor(page, 'tail', 0);
+  await input(page).press('Control+w');
+  await expectEditor(page, 'tail', 0);
+});
+
+test('Ctrl+P/N 浏览真实历史并恢复 Unicode 与多行草稿，末端不丢失输入', async ({ page }) => {
+  await visit(page);
+  await runCommand(page, 'echo shortcut-history-first');
+  await runCommand(page, 'echo shortcut-history-second');
+  const draft = 'echo 未完成😀\n第二行';
+  await input(page).fill(draft);
+  for (const [key, value] of [
+    ['Control+p', 'echo shortcut-history-second'],
+    ['Control+p', 'echo shortcut-history-first'],
+    ['Control+n', 'echo shortcut-history-second'],
+    ['Control+n', draft],
+    ['Control+n', draft],
+  ] as const) {
+    await input(page).press(key);
+    await expectEditor(page, value, value.length);
+  }
+  await expect(output(page)).toHaveText('shortcut-history-second');
+  await input(page).fill('echo recovered-history-draft');
+  await input(page).press('Control+p');
+  await input(page).press('Control+n');
+  await input(page).press('Enter');
+  await expect(output(page)).toHaveText('recovered-history-draft');
+});
+
+test('输入框选区 Ctrl+C 保持原生复制，编辑快捷键不劫持历史搜索输入框', async ({ page }) => {
+  await visit(page);
+  const draft = 'echo keep😀selection';
+  await setEditor(page, draft, 5, 11);
+  await page.evaluate(() => {
+    const copyProbe = (event: KeyboardEvent): void => {
+      if (event.ctrlKey && event.key.toLowerCase() === 'c') {
+        Reflect.set(window, '__editorCopyPrevented', event.defaultPrevented);
+        document.removeEventListener('keydown', copyProbe);
+      }
+    };
+    document.addEventListener('keydown', copyProbe);
+  });
+  await input(page).press('Control+c');
+  await expectEditor(page, draft, 5, 11);
+  expect(await page.evaluate(() => Reflect.get(window, '__editorCopyPrevented'))).toBe(false);
+  await input(page).press('Control+r');
+  const search = page.locator('#history-search');
+  const value = 'search 😀 draft';
+  await search.fill(value);
+  await search.press('Control+a');
+  expect(await search.evaluate(node => {
+    const field = node as HTMLInputElement;
+    return [field.selectionStart, field.selectionEnd];
+  })).toEqual([0, value.length]);
+  await page.evaluate(() => {
+    const copyProbe = (event: KeyboardEvent): void => {
+      if (event.ctrlKey && event.key.toLowerCase() === 'c') {
+        Reflect.set(window, '__historyCopyPrevented', event.defaultPrevented);
+        document.removeEventListener('keydown', copyProbe);
+      }
+    };
+    document.addEventListener('keydown', copyProbe);
+  });
+  await search.press('Control+c');
+  await expect(page.locator('#history-panel')).toBeVisible();
+  await expect(search).toBeFocused();
+  await expect(search).toHaveValue(value);
+  expect(await page.evaluate(() => Reflect.get(window, '__historyCopyPrevented'))).toBe(false);
+  expect(await search.evaluate(node => {
+    const field = node as HTMLInputElement;
+    return [field.selectionStart, field.selectionEnd];
+  })).toEqual([0, value.length]);
+  const results = await search.evaluate(node => {
+    const field = node as HTMLInputElement;
+    field.setSelectionRange(3, 3);
+    return ['a', 'e', 'k', 'u', 'w', 'b', 'f', 'p', 'n', 'd'].map(key => {
+      const event = new KeyboardEvent('keydown', { key, ctrlKey: true, bubbles: true, cancelable: true });
+      field.dispatchEvent(event);
+      return { key, prevented: event.defaultPrevented, value: field.value, selection: [field.selectionStart, field.selectionEnd] };
+    });
+  });
+  for (const result of results) expect(result).toEqual({ key: result.key, prevented: false, value, selection: [3, 3] });
+  await expect(search).toBeFocused();
+  await expect(input(page)).toHaveValue(draft);
+  await search.press('Escape');
+  await expect(input(page)).toHaveValue(draft);
+});
+
+test('IME组合输入及229键码期间，终端编辑键和Enter都保留草稿与当前页面', async ({ page }) => {
+  await visit(page);
+  await runCommand(page, 'echo before-ime');
+  const draft = 'echo 输入中😀';
+  const caret = 'echo 输入'.length;
+  await setEditor(page, draft, caret);
+  const entries = await log(page).locator('.entry').count();
+  const results = await input(page).evaluate(node => {
+    const editor = node as HTMLTextAreaElement;
+    return [true, false].flatMap(composing => ['a', 'e', 'k', 'u', 'w', 'b', 'f', 'p', 'n', 'd', 'r', 'Enter'].map(key => {
+      const event = new KeyboardEvent('keydown', {
+        key, ctrlKey: key !== 'Enter', bubbles: true, cancelable: true,
+        isComposing: composing, keyCode: composing ? 0 : 229,
+      });
+      editor.dispatchEvent(event);
+      return { prevented: event.defaultPrevented, value: editor.value, start: editor.selectionStart, end: editor.selectionEnd };
+    }));
+  });
+  for (const result of results) expect(result).toEqual({ prevented: false, value: draft, start: caret, end: caret });
+  await expectEditor(page, draft, caret);
+  await expect(log(page).locator('.entry')).toHaveCount(entries);
+  await expect(output(page)).toHaveText('before-ime');
+  await expect(page.locator('#history-panel')).toBeHidden();
+});
+
+test('直接执行绝对或相对文档路径从开头阅读，管道输入保留会话和当前URL', async ({ page }) => {
+  await visit(page);
+  for (const command of [quote(poemPost.file), quote(basename(poemPost.file))]) {
+    if (command === quote(basename(poemPost.file))) await runCommand(page, 'cd /posts');
+    await runCommand(page, 'echo cleared-before-direct-document');
+    await expect(output(page)).toHaveText('cleared-before-direct-document');
+    await runCommand(page, command);
+    await expectFile(output(page), poemPost.file);
+    await expect(log(page).locator('.entry')).toHaveCount(1);
+    await expect(log(page)).not.toContainText('cleared-before-direct-document');
+    await expectInsideViewport(page, output(page).locator(':scope > .output-line').first());
+    expect(decodeURIComponent(new URL(page.url()).pathname)).toBe(poemPost.path);
+  }
+  await runCommand(page, 'echo retained-before-document-pipe');
+  const originalURL = page.url();
+  await runCommand(page, `${quote(russianPost.file)} | head -n 3`);
+  expect(await output(page).locator(':scope > .output-line').allTextContents()).toEqual(visibleFileLines(russianPost.file).slice(0, 3));
+  await expect(log(page)).toContainText('retained-before-document-pipe');
+  expect(await log(page).locator('.entry').count()).toBeGreaterThan(1);
+  await expect(page).toHaveURL(originalURL);
+});
+
+test('新增 head/tail、grep 正则与字面匹配、find 类型过滤返回真实原文结果', async ({ page }) => {
+  await visit(page);
+  const expected = visibleFileLines(poemPost.file);
+  await runCommand(page, `head -3 ${quote(poemPost.file)}`);
+  expect(await output(page).locator(':scope > .output-line').allTextContents()).toEqual(expected.slice(0, 3));
+  await runCommand(page, `cat ${quote(poemPost.file)} | tail -n 7`);
+  expect(await output(page).locator(':scope > .output-line').allTextContents()).toEqual(expected.slice(-7));
+  for (const [options, pattern, matching] of [
+    ['', '^# ', (line: string) => /^# /.test(line)],
+    ['-F ', '[', (line: string) => line.includes('[')],
+  ] as const) {
+    const matches = fileLines(poemPost.file).filter(matching).map(visibleContentLine);
+    expect(matches.length).toBeGreaterThan(0);
+    await runCommand(page, `grep ${options}${quote(pattern)} ${quote(poemPost.file)}`);
+    expect(await output(page).locator(':scope > .output-line').allTextContents()).toEqual(matches);
+  }
+  const paths = manifest.files.filter(file => file.path.startsWith('/posts/') && file.path.endsWith('.md')).map(file => file.path).sort();
+  await runCommand(page, "find /posts -type f -name '*.md' | tail -n 3");
+  expect(await output(page).locator(':scope > .output-line').allTextContents()).toEqual(paths.slice(-3));
+});
+
 test.describe('390×844 手机终端', () => {
   test.use({ viewport: MOBILE, isMobile: true, hasTouch: true, deviceScaleFactor: 1 });
 
@@ -981,6 +1643,52 @@ test.describe('390×844 手机终端', () => {
     await input(page).fill('echo scrollback-returned');
     await submit(page).tap();
     await expect(output(page)).toHaveText('scrollback-returned');
+    await expectInputUsable(page);
+    await expectNoHorizontalOverflow(page);
+  });
+
+  test('手机使用原生按钮前后翻页和退出，320px下可到达末页且禁用下一页', async ({ page }) => {
+    await visit(page);
+    const expected = directoryNames('/posts');
+    await input(page).fill('ls /posts | more');
+    await submit(page).tap();
+    await expect(page.locator('html')).toHaveAttribute('data-pager-active', 'true');
+    await expect(pager(page)).toHaveAccessibleName('more 分页阅读');
+    await expect(form(page)).toHaveAttribute('hidden', '');
+    await expect(page.locator('#terminal-log > :visible')).toHaveCount(1);
+    await expect(page.locator('#terminal-log > :visible .pager')).toHaveCount(1);
+    const wide = await expectPagerSlice(page, expected);
+    await page.screenshot({ path: resolve(__dirname, '../../artifacts/mobile-pager.png'), fullPage: false, animations: 'disabled', caret: 'hide', scale: 'css' });
+    await resizePager(page, { width: 320, height: 740 });
+    await expect.poll(async () => (await pagerPosition(page)).end).toBeLessThan(wide.end);
+    for (const control of [pagerPrevious(page), pagerNext(page), pagerClose(page)]) {
+      await expect(control).toHaveJSProperty('tagName', 'BUTTON');
+      await expect(control).toHaveAttribute('type', 'button');
+      await expectInsideViewport(page, control);
+    }
+    const first = await expectPagerSlice(page, expected);
+    expect(first.start).toBe(1);
+    await expect(pagerPrevious(page)).toBeDisabled();
+    await pagerNext(page).tap();
+    await expect.poll(async () => (await pagerPosition(page)).start).toBeGreaterThan(first.start);
+    await expectPagerSlice(page, expected);
+    await pagerPrevious(page).tap();
+    await expect.poll(async () => (await pagerPosition(page)).start).toBe(1);
+    expect(await expectPagerSlice(page, expected)).toEqual(first);
+    let position = first;
+    for (let step = 0; step < expected.length && !position.atEnd; step += 1) {
+      await pagerNext(page).tap();
+      position = await expectPagerSlice(page, expected);
+      await expectPagerWidth(page);
+    }
+    expect(position.atEnd).toBe(true);
+    expect(position.end).toBe(expected.length);
+    await expect(pagerNext(page)).toBeDisabled();
+    await pagerClose(page).tap();
+    await expectPagerClosed(page);
+    await input(page).fill('echo mobile-pager-returned');
+    await submit(page).tap();
+    await expect(output(page)).toHaveText('mobile-pager-returned');
     await expectInputUsable(page);
     await expectNoHorizontalOverflow(page);
   });

@@ -3,6 +3,8 @@ import '@fontsource/ibm-plex-mono/latin-500.css';
 import './style.css';
 import { runCommand, completeCommand, type ShellState, type ShellLine, type Theme } from './shell';
 import { AsciiAnimation } from './ascii';
+import { Pager } from './pager';
+import { editCommandInput } from './editor';
 import { profile, posts, routeFor, hrefForCommand, hrefForFile } from './content';
 import { appendContentText } from './links';
 
@@ -23,6 +25,7 @@ let searchDraft = '';
 let searchIndex = 0;
 let searchMatches: string[] = [];
 let animation: AsciiAnimation | null = null;
+let pager: Pager | null = null;
 
 app.innerHTML = `
   <main id="terminal-screen" aria-label="Sakauma 交互终端">
@@ -141,6 +144,7 @@ function resizeInput(): void {
   form.classList.toggle('has-text', input.value.length > 0);
 }
 function updateJump(): void {
+  if (pager) { jump.hidden = true; return; }
   const bounds = form.getBoundingClientRect();
   const viewportTop = window.visualViewport?.offsetTop ?? 0;
   const viewportBottom = viewportTop + (window.visualViewport?.height ?? window.innerHeight);
@@ -148,18 +152,35 @@ function updateJump(): void {
 }
 function scrollToPrompt(): void {
   requestAnimationFrame(() => {
+    if (pager) return;
     // Keep a visible prompt still. Only reveal it when an explicit command needs it.
     const target = historyPanel.hidden ? form : historyPanel;
     target.scrollIntoView({ block: 'nearest', behavior: 'instant' });
     updateJump();
   });
 }
-function focusInput(): void { input.focus({ preventScroll: true }); resizeInput(); }
+function focusInput(): void { if (!pager) { input.focus({ preventScroll: true }); resizeInput(); } }
 function stopAnimation(): void { animation?.stop(); animation = null; }
-function clear(): void { stopAnimation(); log.replaceChildren(); hints.hidden = true; }
+function stopPager(resume = false): void {
+  if (!pager) return;
+  const current = pager;
+  pager = null;
+  const output = current.output;
+  const summary = current.summary;
+  current.dispose();
+  delete root.dataset.pagerActive;
+  output.parentElement?.classList.remove('pager-entry');
+  output.replaceChildren();
+  linesInto(output, [{ text: summary, tone: 'muted' }]);
+  form.hidden = false;
+  if (resume) { focusInput(); scrollToPrompt(); }
+  updateJump();
+}
+function clear(): void { stopPager(); stopAnimation(); log.replaceChildren(); hints.hidden = true; }
 function execute(raw: string, options: { reveal?: 'prompt' | 'start' | 'none'; address?: boolean } = {}): void {
   const command = raw.trim();
   if (!command) { focusInput(); return; }
+  stopPager();
   const isSetting = /^(motion|theme)(\s|$)/.test(command);
   if (!isSetting) stopAnimation();
   if (commands.at(-1) !== command) commands.push(command);
@@ -169,17 +190,28 @@ function execute(raw: string, options: { reveal?: 'prompt' | 'start' | 'none'; a
   input.value = '';
   hints.hidden = true;
   historyPanel.hidden = true;
-  const output = entry(command);
   const result = runCommand(command, state);
+  if (result.effect?.type === 'document') clear();
+  const output = entry(command);
   if (result.state.theme !== state.theme) save('theme', result.state.theme);
   // Persist an explicit choice even if it equals the system's current setting.
   if (/^motion\s+(on|off)\s*$/.test(command) && !result.lines.some(line => line.tone === 'error')) save('motion', result.state.motion ? 'on' : 'off');
   state = result.state;
   animation?.setMotion(state.motion);
   updateUI();
-  linesInto(output, result.lines);
+  if (result.effect?.type !== 'pager') linesInto(output, result.lines);
   switch (result.effect?.type) {
     case 'clear': clear(); break;
+    case 'home': clear(); showHome(); break;
+    case 'pager':
+      root.dataset.pagerActive = 'true';
+      output.parentElement?.classList.add('pager-entry');
+      form.hidden = true;
+      input.blur();
+      jump.hidden = true;
+      pager = new Pager({ mode: result.effect.mode, label: result.effect.label, lines: result.lines,
+        output, renderLines: linesInto, onExit: () => stopPager(true) });
+      break;
     case 'banner': banner(output); break;
     case 'history': linesInto(output, commands.map((text, index) => ({ text: `${String(index + 1).padStart(3)}  ${text}`, command: text }))); break;
     case 'ascii':
@@ -191,25 +223,45 @@ function execute(raw: string, options: { reveal?: 'prompt' | 'start' | 'none'; a
       break;
   }
   if (options.address !== false && !result.lines.some(line => line.tone === 'error')) {
-    const href = result.file ? hrefForFile(result.file) : undefined;
+    const href = result.effect?.type === 'home' ? '/' : result.file ? hrefForFile(result.file) : undefined;
     if (href) {
       const route = routeFor(href);
       if (location.pathname !== new URL(href, location.origin).pathname) history.pushState(null, '', href);
-      document.title = `${route?.title ?? profile.brand} | Sakauma`;
+      document.title = href === '/' ? 'Sakauma | Egor Izmaylov' : `${route?.title ?? profile.brand} | Sakauma`;
     }
   }
+  if (pager) return;
   focusInput();
-  if (options.reveal === 'start') requestAnimationFrame(() => {
+  if (result.effect?.type === 'home') { window.scrollTo(0, 0); updateJump(); return; }
+  if (options.reveal === 'start' || result.effect?.type === 'document') requestAnimationFrame(() => {
     output.parentElement?.scrollIntoView({ block: 'start', behavior: 'instant' });
     updateJump();
   });
   else if (options.reveal !== 'none') scrollToPrompt();
 }
 
+function moveHistory(direction: -1 | 1): void {
+  if (historyIndex === commands.length) draft = input.value;
+  historyIndex = Math.max(0, Math.min(commands.length, historyIndex + direction));
+  input.value = historyIndex === commands.length ? draft : commands[historyIndex] ?? '';
+  input.setSelectionRange(input.value.length, input.value.length);
+  hints.hidden = true;
+  resizeInput();
+}
 form.addEventListener('submit', (event) => { event.preventDefault(); execute(input.value); });
 input.addEventListener('input', () => { hints.hidden = true; resizeInput(); });
 input.addEventListener('keydown', (event) => {
   if (event.isComposing || event.keyCode === 229) return;
+  if (event.ctrlKey && !event.altKey && !event.metaKey) {
+    const key = event.key.toLowerCase();
+    if (key === 'p' || key === 'n') {
+      event.preventDefault(); moveHistory(key === 'p' ? -1 : 1); return;
+    }
+    if (key === 'd' && !input.value) { event.preventDefault(); execute('home'); return; }
+    if (editCommandInput(input, key)) {
+      event.preventDefault(); hints.hidden = true; resizeInput(); return;
+    }
+  }
   if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); execute(input.value); }
   else if (event.key === 'Tab' && !event.shiftKey) {
     event.preventDefault();
@@ -223,11 +275,7 @@ input.addEventListener('keydown', (event) => {
   } else if (event.key === 'ArrowUp' || event.key === 'ArrowDown') {
     if (input.value.includes('\n')) return;
     event.preventDefault();
-    if (historyIndex === commands.length) draft = input.value;
-    historyIndex = Math.max(0, Math.min(commands.length, historyIndex + (event.key === 'ArrowUp' ? -1 : 1)));
-    input.value = historyIndex === commands.length ? draft : commands[historyIndex] ?? '';
-    input.setSelectionRange(input.value.length, input.value.length);
-    resizeInput();
+    moveHistory(event.key === 'ArrowUp' ? -1 : 1);
   }
 });
 function updateSearch(reset = true): void {
@@ -259,13 +307,17 @@ historySearch.addEventListener('keydown', (event) => {
   if (event.key === 'Enter') { event.preventDefault(); closeSearch(true); }
 });
 document.addEventListener('keydown', (event) => {
-  if (event.isComposing || event.keyCode === 229) return;
+  if (event.isComposing || event.keyCode === 229 || event.defaultPrevented) return;
+  if (pager) { pager.handleKey(event); return; }
   const control = (event.ctrlKey || event.metaKey) && !event.altKey;
   if (control && event.key.toLowerCase() === 'l') { event.preventDefault(); clear(); focusInput(); scrollToPrompt(); }
   else if (control && event.key.toLowerCase() === 'r') { event.preventDefault(); startSearch(); }
   else if ((control && event.key.toLowerCase() === 'c') || event.key === 'Escape') {
     // Preserve ordinary copy when text is selected.
-    if (event.key !== 'Escape' && (window.getSelection()?.toString() || (input === document.activeElement && input.selectionStart !== input.selectionEnd))) return;
+    const selectedInput = document.activeElement;
+    const hasInputSelection = (selectedInput instanceof HTMLInputElement || selectedInput instanceof HTMLTextAreaElement)
+      && selectedInput.selectionStart !== selectedInput.selectionEnd;
+    if (event.key !== 'Escape' && (window.getSelection()?.toString() || hasInputSelection)) return;
     event.preventDefault();
     if (!historyPanel.hidden) { closeSearch(false); return; }
     stopAnimation();
@@ -350,4 +402,4 @@ root.classList.add('app-ready');
 resizeInput();
 if (matchMedia('(pointer: fine)').matches) focusInput();
 void document.fonts.ready.then(updateJump);
-if (import.meta.hot) import.meta.hot.dispose(() => stopAnimation());
+if (import.meta.hot) import.meta.hot.dispose(() => { stopPager(); stopAnimation(); });

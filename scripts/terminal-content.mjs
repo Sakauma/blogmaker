@@ -145,7 +145,19 @@ export async function createTerminalContent(root) {
     'help                    查看命令', 'ls posts                浏览文章', 'cat /posts/index.md     阅读全部文章索引',
     'cat /archives/index.md  按日期阅读', 'cat /tags/index.md      标签', 'cat /categories/index.md 分类',
     'cat /about.txt          关于', 'cat /contact.txt        联系', 'cat /assets.md          原始插画与图片资源',
-    'ls projects             两个站点仓库', 'ascii donut             字符实验', '', profile.footer,
+    'ls projects             两个站点仓库', 'ascii donut             字符实验', '',
+    'less /posts/index.md     分页阅读；Space/b 翻页，j/k 移动，g/G 首尾，q 退出',
+    'tree /posts | less      管道也可以分页；手机可点翻页按钮',
+    './about.txt             文档路径可直接执行，从开头打开',
+    'home / exit             返回首页，保留主题与命令历史', '',
+    'head -5 /about.txt      前 5 行；tail -5 查看后 5 行',
+    "grep -i 'sakauma|github' /about.txt /contact.txt    正则筛选；-F 按字面匹配",
+    "find /posts -name '*.md' -type f                  按名称和类型查找",
+    'cat /about.txt | wc -wc  词数与 UTF-8 字节数', '',
+    'Tab 补全命令、文档路径与参数；Ctrl+R 搜索历史。',
+    'Ctrl+A/E 行首尾，Ctrl+B/F 前后移动，Ctrl+K/U 删至行尾首，Ctrl+W 删前词。',
+    'Ctrl+P/N 上下条历史；Ctrl+D 删光标后字素，空输入时返回首页。',
+    '普通 cat 整页滚动；less / more 才进入分页。选中文本后 Ctrl+C 复制。', '', profile.footer,
   ].join('\n'));
   addFile('/lab/README.txt', 'ASCII lab\n\nascii donut    旋转字符圆环\nascii matrix   字符雨\nascii off      停止实验\nmotion off     静态画面\n\nEsc / Ctrl+C 停止并保留最后一帧。');
   addFile('/projects/blogmaker.md', '# blogmaker\n\nSakauma 站点的源码和静态生成器。保存文章原文、终端前端、内容转换、测试与发布脚本。\n\n[源码仓库](https://github.com/Sakauma/blogmaker)');

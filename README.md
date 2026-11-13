@@ -44,7 +44,66 @@ ls projects
 ascii donut
 ```
 
-`posts` 按日期显示全部文章标题，`search 关键词` 搜索标题和正文。文件名和文章标题可点击，文章从开头展开；Tab 补全命令与路径，方向键选择历史命令。`/assets.md` 保留原首页 Tlaloc 插画和全部旧图片的资源链接；`projects/` 介绍真实源码与发布仓库。文章链接仍使用原永久 URL，直接打开会启动对应的 `cat` 命令。
+`posts` 按日期显示全部文章标题，`search 关键词` 搜索标题和正文。文件名和文章标题可点击，文章从开头展开；Tab 补全命令、文档路径、参数和选项值，方向键选择历史命令。`/assets.md` 保留原首页 Tlaloc 插画和全部旧图片的资源链接；`projects/` 介绍真实源码与发布仓库。文章链接仍使用原永久 URL，直接打开会启动对应的 `cat` 命令。
+
+文档本身也可以作为命令：直接输入 `/posts/001-2026-01-21.md`、`./about.txt`、`contact` 或 `readme`，会清屏并从开头打开。`cat` 保留此前会话，继续使用整页自然滚动；`home`、`exit` 和空输入时的 Ctrl+D 返回首页与根目录，保留历史命令和主题偏好。
+
+### 分页阅读
+
+```text
+less /posts/index.md
+more /posts/001-2026-01-21.md
+tree /posts | less
+cat /about.txt | less
+```
+
+只有 `less` / `more` 会进入分页模式，普通阅读方式保持整页滚动。分页器按当前视口与实际文字换行显示一屏，长行可以跨页；原文、缩进和可点击链接保持完整。手机可使用“上一页 / 下一页 / 退出分页”按钮。退出后恢复会话和输入行。
+
+| 操作 | 按键 |
+| --- | --- |
+| 下一页 / 上一页 | Space、PageDown、f / b、PageUp |
+| 下一行 / 上一行 | j、↓、Enter / k、↑ |
+| 首屏 / 尾屏 | g / G |
+| 下半页 / 上半页 | Ctrl+D / Ctrl+U |
+| 退出分页 | q、Esc、Ctrl+C；到 END 后再按 Space、PageDown 或 f |
+
+选中文本时 Ctrl+C 仍用于复制。翻页控件保留原生 Tab 和 Enter / Space 激活行为。窗口尺寸变化后保留正在阅读的原文位置。
+
+### 文本筛选与统计
+
+```text
+head -5 /about.txt
+tail -n 8 /about.txt
+tail +3 /about.txt
+grep -i 'sakauma|github' /about.txt /contact.txt
+grep -F '[诗歌]' /tags/index.md
+find /posts -name '0[12]*.md' -type f
+find /tags /archives -type d
+cat /about.txt | wc -wc
+wc -l /about.txt /contact.txt
+/posts/001-2026-01-21.md | head -5
+```
+
+- `head` 默认前 10 行，支持 `-n N` / `-N`（0..1000）；`tail` 默认后 10 行，也支持 `+N` / `-n +N` 从第 N 行开始。两者支持多个文件与管道。
+- `grep` 默认使用 JavaScript 正则表达式，`-i` 忽略大小写，`-F` 按字面匹配；多文件结果标注来源。错误正则会报告错误。
+- `find` 支持多个起点、`-name` 的 `* ? []` 通配模式及 `-type f|d`。
+- `wc -l/-w/-c` 可组合；`-c` 与默认第三列均按 UTF-8 **字节**计数，多文件显示合计。
+- 管道先完成整条命令的参数与路径验证。文档作为管道输入时只输出文本；分页器可以放在末端，`home`、主题切换等状态命令独立执行。
+
+### 编辑与历史
+
+以下编辑键仅作用于命令输入框，中文输入法组合输入保持原行为。移动、删除以 Unicode 字素为边界，保留俄文组合重音及 emoji 的完整性。
+
+| 操作 | 按键 |
+| --- | --- |
+| 当前行首 / 行尾 | Ctrl+A / Ctrl+E |
+| 前移 / 后移一个字素 | Ctrl+B / Ctrl+F |
+| 删除到行尾 / 行首 | Ctrl+K / Ctrl+U |
+| 删除前一个词 | Ctrl+W |
+| 删除选区或光标后的字素 | Ctrl+D；空输入时返回首页 |
+| 上一条 / 下一条历史 | ↑ / ↓、Ctrl+P / Ctrl+N；返回末端恢复草稿 |
+| 搜索历史 | Ctrl+R；再次按查找上一条，Enter 选取，Esc 恢复草稿 |
+| 清屏 / 取消输入或字符动画 | Ctrl+L / Ctrl+C、Esc |
 
 ## 新建文章
 

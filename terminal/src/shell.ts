@@ -8,15 +8,18 @@ export type Effect =
   | { type: 'clear' }
   | { type: 'banner' }
   | { type: 'history' }
+  | { type: 'home' }
+  | { type: 'document' }
+  | { type: 'pager'; mode: 'more' | 'less'; label: string }
   | { type: 'ascii'; mode: 'donut' | 'matrix' | 'off' };
 export interface ShellResult { lines: ShellLine[]; state: ShellState; effect?: Effect; file?: string }
 
 const INPUT_LIMIT = 4096;
 const HEAD_LIMIT = 1000;
 const COMMANDS = [
-  'about', 'ascii', 'banner', 'cat', 'cd', 'clear', 'coffee', 'date', 'echo',
-  'find', 'grep', 'head', 'help', 'history', 'ls', 'matrix', 'motion', 'neofetch',
-  'notes', 'open', 'posts', 'projects', 'pwd', 'search', 'sudo', 'tags', 'categories', 'archives', 'theme', 'tree', 'wc', 'whoami',
+  'about', 'ascii', 'banner', 'cat', 'cd', 'clear', 'coffee', 'contact', 'date', 'echo', 'exit',
+  'find', 'grep', 'head', 'help', 'history', 'home', 'less', 'ls', 'matrix', 'more', 'motion', 'neofetch',
+  'notes', 'open', 'posts', 'projects', 'pwd', 'readme', 'search', 'sudo', 'tags', 'tail', 'categories', 'archives', 'theme', 'tree', 'wc', 'whoami',
 ] as const;
 const COMMAND_SET = new Set<string>(COMMANDS);
 const THEMES: Theme[] = ['dark', 'light', 'amber'];
@@ -25,7 +28,8 @@ const ASCII_MODES = ['donut', 'matrix', 'off'] as const;
 type Entry = { path: string; kind: 'directory' } | { path: string; kind: 'file'; text: string };
 type FileSystem = Map<string, Entry>;
 interface Token { value: string; start: number; end: number }
-interface Plan { pure: boolean; run: (stdin?: ShellLine[]) => ShellResult }
+interface Source { path?: string; lines: ShellLine[]; text: string }
+interface Plan { kind: 'text' | 'standalone' | 'pager'; run: (stdin?: ShellLine[]) => ShellResult }
 class ShellError extends Error {}
 
 function fail(message: string): never { throw new ShellError(message); }
@@ -73,12 +77,12 @@ function getEntry(fs: FileSystem, path: string, cwd: string, command: string): E
   if (!entry) fail(`${command}: ${path}: no such file or directory`);
   return entry;
 }
-function getFile(fs: FileSystem, path: string, cwd: string, command: string): ShellLine[] {
+function getFile(fs: FileSystem, path: string, cwd: string, command: string): Extract<Entry, { kind: 'file' }> {
   const entry = getEntry(fs, path, cwd, command);
   if (entry.kind !== 'file') fail(`${command}: ${path}: is a directory`);
   // A trailing slash explicitly asks for a directory, even when its basename is a file.
   if (path.endsWith('/')) fail(`${command}: ${path}: not a directory`);
-  return textLines(entry.text).map(line => ({ ...line, markup: true }));
+  return entry;
 }
 function quoteArgument(value: string): string {
   return /^[\w./~-]+$/.test(value) ? value : `'${value.replace(/'/g, "'\\''")}'`;
@@ -151,16 +155,45 @@ function positional(args: string[], flags: readonly string[], command: string): 
   return { flags: found, rest };
 }
 
+function globPattern(pattern: string): RegExp {
+  let expression = '^';
+  for (let i = 0; i < pattern.length; i++) {
+    const char = pattern[i];
+    if (char === '*') expression += '.*';
+    else if (char === '?') expression += '.';
+    else if (char === '[') {
+      let start = i + 1;
+      const negative = pattern[start] === '!' || pattern[start] === '^';
+      if (negative) start++;
+      // A closing bracket at the start of a character class denotes a literal ].
+      const end = pattern.indexOf(']', pattern[start] === ']' ? start + 1 : start);
+      if (end === -1) expression += '\\[';
+      else {
+        const body = pattern.slice(start, end).replace(/[\\\]]/g, '\\$&');
+        expression += `[${negative ? '^' : ''}${body}]`;
+        i = end;
+      }
+    } else expression += char.replace(/[\\^$+?.(){}|\]]/g, '\\$&');
+  }
+  try { return new RegExp(expression + '$', 'u'); }
+  catch { return fail(`find: invalid glob ${pattern}`); }
+}
+
 const HELP = [
   'Commands · / is the website root (~)',
   'help                         show this guide',
   'ls [-a/-l] [path]             list files; click a name to open it',
   'cd [path] · pwd               move through directories / print your path',
-  'cat file [file ...]           read complete text',
-  'tree [path] · find [path]     explore the virtual filesystem',
-  'grep [-i] pattern [file]      find literal text (or filter a pipe)',
-  'head [-n 0..1000] [file]      first lines (default: 10)',
-  'wc [-l] [file]                line / word / character counts',
+  'home · exit                  return to the homepage; keep theme and motion',
+  'cat file [file ...]           read complete text (or piped input)',
+  './file.md · contact · readme  open a document from the beginning',
+  'more [file] · less [file]     page a complete file or piped text',
+  'tree [path]                  explore the virtual filesystem',
+  'find [paths...] [-name GLOB] [-type f|d]  match names (* ? []) and kinds',
+  'grep [-iF] pattern [files...] match a JS regex; -i ignores case, -F is literal',
+  'head [-n N|-N] [files...]     first lines (default: 10; N: 0..1000)',
+  'tail [-n N|-N|+N] [files...]  last lines (default: 10); +N starts at line N',
+  'wc [-lwc] [files...]          line / word / UTF-8 byte counts and totals',
   'echo text                    print text literally',
   'theme dark|light|amber        choose terminal colors',
   'motion on|off                choose animation preference',
@@ -174,23 +207,45 @@ const HELP = [
   'tags · categories · archives browse the article indexes',
   'open id|path|url             read an article by id or published URL',
   '',
-  'Tab completes commands and paths. Quotes and backslash escapes preserve spaces.',
-  'Connect commands with pipes: posts | grep 雷鬼 | wc -l',
+  'Tab completes commands, options, values and paths. Quotes and escapes preserve spaces.',
+  'Text filters accept piped input: posts | grep 雷鬼 | wc -l',
+  'A pager must finish a pipeline: cat about.txt | less',
 ];
 
-function prepare(words: string[], state: ShellState, fs: FileSystem, receivesInput: boolean): Plan {
+function prepare(words: string[], state: ShellState, fs: FileSystem, receivesInput: boolean, inPipeline: boolean): Plan {
   const [command, ...args] = words;
-  if (!COMMAND_SET.has(command)) fail(`${command}: command not found. Type help.`);
   const result = (lines: ShellLine[], next = state, effect?: Effect): ShellResult =>
     effect ? { lines, state: { ...next }, effect } : { lines, state: { ...next } };
-  const pure = (run: (stdin?: ShellLine[]) => ShellLine[]): Plan => ({ pure: true, run: (stdin) => result(run(stdin)) });
-  const source = (paths: string[], name: string): ((stdin?: ShellLine[]) => ShellLine[]) => {
+  const pure = (run: (stdin?: ShellLine[]) => ShellLine[]): Plan => ({ kind: 'text', run: (stdin) => result(run(stdin)) });
+  const source = (paths: string[], name: string): ((stdin?: ShellLine[]) => Source[]) => {
     if (!paths.length && !receivesInput) fail(`${name}: expected a file or piped input`);
     // Resolve every source now: no command in the pipeline executes until all plans are valid.
-    const files = paths.map((path) => getFile(fs, path, state.cwd, name));
-    return (stdin) => files.length ? files.flat() : (stdin ?? []);
+    const inputs = paths.map((path) => {
+      const file = getFile(fs, path, state.cwd, name);
+      return { path, text: file.text, lines: textLines(file.text).map(line => ({ ...line, markup: true })) };
+    });
+    return (stdin = []) => inputs.length ? inputs : [{
+      lines: stdin,
+      text: stdin.map(line => line.text).join('\n') + (stdin.length ? '\n' : ''),
+    }];
   };
-  const effectPlan = (effect: Effect): Plan => ({ pure: false, run: () => result([], state, effect) });
+  const effectPlan = (effect: Effect): Plan => ({ kind: 'standalone', run: () => result([], state, effect) });
+  const documentPlan = (path: string): Plan => {
+    const readSource = source([path], command);
+    const file = normalizePath(path, state.cwd);
+    return { kind: 'text', run: () => {
+      const output = result(readSource()[0].lines, state, inPipeline ? undefined : { type: 'document' });
+      if (!inPipeline) output.file = file;
+      return output;
+    } };
+  };
+  if (!COMMAND_SET.has(command)) {
+    const entry = fs.get(normalizePath(command, state.cwd));
+    if (!entry) fail(`${command}: command not found. Type help.`);
+    if (entry.kind === 'directory') fail(`${command}: is a directory`);
+    noArgs(args, command);
+    return documentPlan(command);
+  }
   switch (command) {
     case 'help':
       noArgs(args, command);
@@ -202,8 +257,12 @@ function prepare(words: string[], state: ShellState, fs: FileSystem, receivesInp
       expectArgs(args, 0, 1, 'cd [path]');
       const entry = getEntry(fs, args[0] ?? '~', state.cwd, command);
       if (entry.kind !== 'directory') fail(`cd: ${args[0]}: not a directory`);
-      return { pure: false, run: () => result([], { ...state, cwd: entry.path }) };
+      return { kind: 'standalone', run: () => result([], { ...state, cwd: entry.path }) };
     }
+    case 'home':
+    case 'exit':
+      noArgs(args, command);
+      return { kind: 'standalone', run: () => result([], { ...state, cwd: '/' }, { type: 'home' }) };
     case 'ls': {
       const parsed = positional(args, ['a', 'l'], command);
       expectArgs(parsed.rest, 0, 1, 'ls [-a/-l] [path]');
@@ -221,21 +280,37 @@ function prepare(words: string[], state: ShellState, fs: FileSystem, receivesInp
     case 'cat': {
       const parsed = positional(args, [], command);
       const readSource = source(parsed.rest, command);
-      return { pure: true, run: stdin => {
-        const output = result(readSource(stdin));
-        if (parsed.rest.length === 1) output.file = normalizePath(parsed.rest[0], state.cwd);
+      return { kind: 'text', run: stdin => {
+        const output = result(readSource(stdin).flatMap(input => input.lines));
+        if (parsed.rest.length === 1 && !receivesInput) output.file = normalizePath(parsed.rest[0], state.cwd);
         return output;
       } };
     }
+    case 'more':
+    case 'less': {
+      const parsed = positional(args, [], command);
+      expectArgs(parsed.rest, 0, 1, `${command} [file]`);
+      const readSource = source(parsed.rest, command);
+      const file = parsed.rest.length ? normalizePath(parsed.rest[0], state.cwd) : undefined;
+      return { kind: 'pager', run: stdin => {
+        const output = result(readSource(stdin)[0].lines, state, { type: 'pager', mode: command, label: file ?? 'stdin' });
+        if (file && !receivesInput) output.file = file;
+        return output;
+      } };
+    }
+    case 'contact':
+    case 'readme':
+      noArgs(args, command);
+      return documentPlan(command === 'contact' ? '/contact.txt' : '/README.md');
     case 'about':
       noArgs(args, command);
-      return prepare(['cat', '/about.txt'], state, fs, receivesInput);
+      return prepare(['cat', '/about.txt'], state, fs, receivesInput, inPipeline);
     case 'projects':
     case 'tags':
     case 'categories':
     case 'archives':
       noArgs(args, command);
-      return prepare(['ls', `/${command}`], state, fs, receivesInput);
+      return prepare(['ls', `/${command}`], state, fs, receivesInput, inPipeline);
     case 'posts':
     case 'notes':
       noArgs(args, command);
@@ -264,24 +339,23 @@ function prepare(words: string[], state: ShellState, fs: FileSystem, receivesInp
       const route = routeFor(urlPath);
       if (!post && !project && route) {
         const routeTokens = tokenize(route.command);
-        return prepare(routeTokens[0].map(token => token.value), state, fs, receivesInput);
+        return prepare(routeTokens[0].map(token => token.value), state, fs, receivesInput, inPipeline);
       }
-      return prepare(['cat', '--', post?.file ?? project?.path ?? id], state, fs, receivesInput);
+      return prepare(['cat', '--', post?.file ?? project?.path ?? id], state, fs, receivesInput, inPipeline);
     }
-    case 'tree':
-    case 'find': {
-      expectArgs(args, 0, 1, `${command} [path]`);
-      if (args[0]?.startsWith('-')) fail(`${command}: unknown option ${args[0]}`);
+    case 'tree': {
+      expectArgs(args, 0, 1, 'tree [path]');
+      if (args[0]?.startsWith('-')) fail(`tree: unknown option ${args[0]}`);
       const root = getEntry(fs, args[0] ?? '.', state.cwd, command);
-      if (args[0]?.endsWith('/') && root.kind !== 'directory') fail(`${command}: ${args[0]}: not a directory`);
+      if (args[0]?.endsWith('/') && root.kind !== 'directory') fail(`tree: ${args[0]}: not a directory`);
       return pure(() => {
-        const lines: ShellLine[] = [entryLine(root, command === 'find' ? root.path : root.path === '/' ? '/' : basename(root.path))];
+        const lines: ShellLine[] = [entryLine(root, root.path === '/' ? '/' : basename(root.path))];
         const walk = (entry: Entry, prefix: string) => {
           if (entry.kind !== 'directory') return;
           const items = children(fs, entry.path);
           items.forEach((child, index) => {
             const last = index === items.length - 1;
-            lines.push(entryLine(child, command === 'find' ? child.path : `${prefix}${last ? '└── ' : '├── '}${basename(child.path)}${child.kind === 'directory' ? '/' : ''}`));
+            lines.push(entryLine(child, `${prefix}${last ? '└── ' : '├── '}${basename(child.path)}${child.kind === 'directory' ? '/' : ''}`));
             walk(child, `${prefix}${last ? '    ' : '│   '}`);
           });
         };
@@ -289,50 +363,129 @@ function prepare(words: string[], state: ShellState, fs: FileSystem, receivesInp
         return lines;
       });
     }
-    case 'grep': {
-      // Options belong before the pattern, so a literal pattern never changes later parsing.
-      let cursor = 0;
-      let insensitive = false;
-      while (cursor < args.length && args[cursor].startsWith('-')) {
-        const option = args[cursor++];
-        if (option === '--') break;
-        if (option !== '-i') fail(`grep: unknown option ${option}`);
-        insensitive = true;
-      }
-      const rest = args.slice(cursor);
-      expectArgs(rest, 1, 2, 'grep [-i] pattern [file]');
-      const pattern = insensitive ? rest[0].toLocaleLowerCase() : rest[0];
-      const readSource = source(rest.slice(1), command);
-      return pure((stdin) => readSource(stdin).filter((line) =>
-        (insensitive ? line.text.toLocaleLowerCase() : line.text).includes(pattern)));
-    }
-    case 'head': {
-      let count = 10;
+    case 'find': {
       const paths: string[] = [];
+      const predicates: Array<(entry: Entry) => boolean> = [];
+      let expression = false;
       let options = true;
       for (let i = 0; i < args.length; i++) {
-        if (options && args[i] === '--') options = false;
-        else if (options && args[i] === '-n') {
+        const arg = args[i];
+        if (options && arg === '--' && !expression) options = false;
+        else if (arg === '-name') {
+          expression = true;
+          if (args[i + 1] === undefined) fail('find: -name expects a glob pattern');
+          const pattern = globPattern(args[++i]);
+          predicates.push(entry => pattern.test(basename(entry.path)));
+        } else if (arg === '-type') {
+          expression = true;
           const value = args[++i];
-          if (!value || !/^\d+$/.test(value) || Number(value) > HEAD_LIMIT) fail(`head: -n expects an integer from 0 to ${HEAD_LIMIT}`);
-          count = Number(value);
-        } else if (options && args[i].startsWith('-')) fail(`head: unknown option ${args[i]}`);
-        else paths.push(args[i]);
+          if (value !== 'f' && value !== 'd') fail('find: -type expects f or d');
+          predicates.push(entry => entry.kind === (value === 'f' ? 'file' : 'directory'));
+        } else if (options && arg.startsWith('-')) fail(`find: unknown option ${arg}`);
+        else if (expression) fail(`find: unexpected argument ${arg}; paths must precede filters`);
+        else paths.push(arg);
       }
-      expectArgs(paths, 0, 1, 'head [-n N] [file]');
+      const roots = (paths.length ? paths : ['.']).map(path => {
+        const entry = getEntry(fs, path, state.cwd, command);
+        if (path.endsWith('/') && entry.kind !== 'directory') fail(`find: ${path}: not a directory`);
+        return entry;
+      });
+      return pure(() => {
+        const lines: ShellLine[] = [];
+        const walk = (entry: Entry) => {
+          if (predicates.every(predicate => predicate(entry))) lines.push(entryLine(entry, entry.path));
+          if (entry.kind === 'directory') children(fs, entry.path).forEach(walk);
+        };
+        roots.forEach(walk);
+        return lines;
+      });
+    }
+    case 'grep': {
+      // Options belong before the pattern; subsequent arguments are always source paths.
+      let cursor = 0;
+      let insensitive = false;
+      let literal = false;
+      while (cursor < args.length && args[cursor].startsWith('-') && args[cursor] !== '-') {
+        const option = args[cursor++];
+        if (option === '--') break;
+        if (!/^-[iF]+$/.test(option)) fail(`grep: unknown option ${option}`);
+        insensitive ||= option.includes('i');
+        literal ||= option.includes('F');
+      }
+      const rest = args.slice(cursor);
+      if (!rest.length) fail('usage: grep [-iF] pattern [files...]');
+      let matches: (text: string) => boolean;
+      if (literal) {
+        const pattern = insensitive ? rest[0].toLocaleLowerCase() : rest[0];
+        matches = text => (insensitive ? text.toLocaleLowerCase() : text).includes(pattern);
+      } else {
+        let pattern: RegExp;
+        try { pattern = new RegExp(rest[0], insensitive ? 'i' : ''); }
+        catch (error) { return fail(`grep: invalid regular expression: ${(error as Error).message}`); }
+        matches = text => pattern.test(text);
+      }
+      const readSource = source(rest.slice(1), command);
+      return pure((stdin) => readSource(stdin).flatMap(input => input.lines
+        .filter(line => matches(line.text))
+        .map(line => rest.length > 2 ? { ...line, text: `${input.path}:${line.text}` } : line)));
+    }
+    case 'head':
+    case 'tail': {
+      let count = 10;
+      let fromStart = false;
+      const paths: string[] = [];
+      let options = true;
+      const setCount = (value: string | undefined) => {
+        const valid = value !== undefined && (command === 'tail' ? /^\+?\d+$/ : /^\d+$/).test(value);
+        const number = Number(value);
+        if (!valid || !Number.isSafeInteger(number) || (command === 'head' && number > HEAD_LIMIT)) {
+          fail(command === 'head' ? `head: -n expects an integer from 0 to ${HEAD_LIMIT}`
+            : 'tail: line count expects a nonnegative safe integer (or +N)');
+        }
+        count = number;
+        fromStart = value!.startsWith('+');
+      };
+      for (let i = 0; i < args.length; i++) {
+        const arg = args[i];
+        if (options && arg === '--') options = false;
+        else if (options && arg === '-n') setCount(args[++i]);
+        else if (options && /^-\d+$/.test(arg)) setCount(arg.slice(1));
+        else if (options && command === 'tail' && arg.startsWith('+')) setCount(arg);
+        else if (options && arg.startsWith('-')) fail(`${command}: unknown option ${arg}`);
+        else paths.push(arg);
+      }
       const readSource = source(paths, command);
-      return pure((stdin) => readSource(stdin).slice(0, count));
+      return pure((stdin) => readSource(stdin).flatMap((input, index) => {
+        const lines = command === 'head' ? input.lines.slice(0, count)
+          : fromStart ? input.lines.slice(Math.max(0, count - 1))
+            : count === 0 ? [] : input.lines.slice(-count);
+        return paths.length > 1 ? [
+          ...(index ? [{ text: '' }] : []), { text: `==> ${input.path} <==`, tone: 'muted' as const }, ...lines,
+        ] : lines;
+      }));
     }
     case 'wc': {
-      const parsed = positional(args, ['l'], command);
-      expectArgs(parsed.rest, 0, 1, 'wc [-l] [file]');
+      const parsed = positional(args, ['l', 'w', 'c'], command);
       const readSource = source(parsed.rest, command);
       return pure((stdin) => {
-        const lines = readSource(stdin);
-        const text = lines.map((line) => line.text).join('\n') + (lines.length ? '\n' : '');
-        const counts = parsed.flags.has('l') ? `${lines.length}`
-          : `${lines.length} ${text.match(/\S+/g)?.length ?? 0} ${Array.from(text).length}`;
-        return [{ text: counts + (parsed.rest.length ? ` ${parsed.rest[0]}` : '') }];
+        const flags = ['l', 'w', 'c'].filter(flag => !parsed.flags.size || parsed.flags.has(flag));
+        const counts = (input: Source) => ({
+          l: input.lines.length, w: input.text.match(/\S+/g)?.length ?? 0, c: new TextEncoder().encode(input.text).length,
+        });
+        type Counts = ReturnType<typeof counts>;
+        const render = (count: Counts, label?: string): ShellLine => ({
+          text: flags.map(flag => count[flag as keyof Counts]).join(' ') + (label === undefined ? '' : ` ${label}`),
+        });
+        const total: Counts = { l: 0, w: 0, c: 0 };
+        const lines = readSource(stdin).map(input => {
+          const count = counts(input);
+          total.l += count.l;
+          total.w += count.w;
+          total.c += count.c;
+          return render(count, input.path);
+        });
+        if (parsed.rest.length > 1) lines.push(render(total, 'total'));
+        return lines;
       });
     }
     case 'echo':
@@ -341,13 +494,13 @@ function prepare(words: string[], state: ShellState, fs: FileSystem, receivesInp
       expectArgs(args, 0, 1, 'theme dark|light|amber');
       if (args.length && !THEMES.includes(args[0] as Theme)) fail('theme: expected dark, light, or amber');
       const theme = (args[0] ?? state.theme) as Theme;
-      return { pure: false, run: () => result([{ text: `theme: ${theme}`, tone: 'accent' }], { ...state, theme }) };
+      return { kind: 'standalone', run: () => result([{ text: `theme: ${theme}`, tone: 'accent' }], { ...state, theme }) };
     }
     case 'motion': {
       expectArgs(args, 0, 1, 'motion on|off');
       if (args.length && args[0] !== 'on' && args[0] !== 'off') fail('motion: expected on or off');
       const motion = args.length ? args[0] === 'on' : state.motion;
-      return { pure: false, run: () => result([{ text: `motion: ${motion ? 'on' : 'off'}`, tone: 'accent' }], { ...state, motion }) };
+      return { kind: 'standalone', run: () => result([{ text: `motion: ${motion ? 'on' : 'off'}`, tone: 'accent' }], { ...state, motion }) };
     }
     case 'ascii':
       expectArgs(args, 0, 1, 'ascii [donut|matrix|off]');
@@ -388,10 +541,19 @@ export function runCommand(input: string, state: ShellState): ShellResult {
     const stages = tokenize(input);
     if (stages.length === 1 && !stages[0].length) return { lines: [], state: original };
     const fs = fileSystem();
-    const plans = stages.map((tokens, index) => prepare(tokens.map((token) => token.value), original, fs, index > 0));
-    if (plans.length > 1 && plans.some((plan) => !plan.pure)) fail('pipeline: only text-producing commands are allowed; state and display commands must run on their own');
+    const plans = stages.map((tokens, index) => prepare(tokens.map((token) => token.value), original, fs, index > 0, stages.length > 1));
+    if (plans.length > 1) {
+      if (plans.some((plan, index) => plan.kind === 'pager' && index !== plans.length - 1)) {
+        fail('pipeline: more/less must be the final command');
+      }
+      if (plans.some(plan => plan.kind === 'standalone')) {
+        fail('pipeline: only text-producing commands are allowed before an optional final pager; state and display commands must run on their own');
+      }
+    }
     let output: ShellResult = { lines: [], state: original };
     plans.forEach((plan, index) => { output = plan.run(index ? output.lines : undefined); });
+    // A pipeline is derived output, even when its final stage happens to read a whole file.
+    if (plans.length > 1) delete output.file;
     return output;
   } catch (error) {
     if (!(error instanceof ShellError)) throw error;
@@ -437,7 +599,10 @@ export function completeCommand(input: string, state: ShellState): { value: stri
   const prefix = current.value;
   const raw = input.slice(current.start);
   let candidates: string[] = [];
-  if (!before.length) candidates = COMMANDS.filter((command) => command.startsWith(prefix));
+  if (!before.length) candidates = [
+    ...COMMANDS.filter(command => command.startsWith(prefix)),
+    ...pathCandidates(prefix, normalizePath(state.cwd, '/'), fileSystem(), false),
+  ];
   else {
     const command = before[0].value;
     const args = before.slice(1).map((token) => token.value);
@@ -446,18 +611,37 @@ export function completeCommand(input: string, state: ShellState): { value: stri
     else if (command === 'motion' && !args.length) candidates = ['off', 'on'].filter((value) => value.startsWith(prefix));
     else if (command === 'ascii' && !args.length) candidates = ASCII_MODES.filter((value) => value.startsWith(prefix));
     else if (command === 'sudo' && args.length < 2) candidates = (args.length ? args[0] === 'make' ? ['coffee'] : [] : ['make']).filter((value) => value.startsWith(prefix));
-    else if (command === 'head' && args[args.length - 1] === '-n') candidates = ['5', '10', '20'].filter((value) => value.startsWith(prefix));
-    else if (prefix.startsWith('-') && !args.includes('--')) {
-      const options: Record<string, string[]> = { ls: ['-a', '-l', '-al'], grep: ['-i'], head: ['-n'], wc: ['-l'] };
-      candidates = (Object.hasOwn(options, command) ? options[command] : []).filter((value) => value.startsWith(prefix));
-    } else if (['ls', 'cd', 'cat', 'tree', 'find', 'grep', 'head', 'wc', 'open'].includes(command)) {
-      // The first positional argument of grep is a text pattern, not a filename.
-      const grepArgs = args.filter((arg) => arg !== '-i' && arg !== '--');
-      if (command !== 'grep' || grepArgs.length > 0) {
-        candidates = pathCandidates(prefix, normalizePath(state.cwd, '/'), fileSystem(), command === 'cd');
-        if (command === 'open' && !args.length && !prefix.includes('/')) {
-          candidates.push(...[...posts.map(post => post.id), ...projectFiles.map(file => basename(file.path).replace(/\.md$/, ''))].filter(id => id.startsWith(prefix)));
-        }
+    else if (['head', 'tail'].includes(command) && !args.includes('--') && args[args.length - 1] === '-n') {
+      candidates = ['0', '5', '10', '20', ...(command === 'tail' ? ['+1', '+10', '+20'] : [])].filter(value => value.startsWith(prefix));
+    } else if (command === 'find' && args[args.length - 1] === '-type') {
+      candidates = ['f', 'd'].filter(value => value.startsWith(prefix));
+    } else if (command === 'find' && args[args.length - 1] === '-name') {
+      candidates = ['*', '*.md', '*.txt', 'README.*'].filter(value => value.startsWith(prefix));
+    } else if (command === 'grep') {
+      // Stop at the first pattern, including patterns such as '-i' following --.
+      let cursor = 0;
+      let options = true;
+      while (cursor < args.length && args[cursor].startsWith('-') && args[cursor] !== '-') {
+        const arg = args[cursor++];
+        if (arg === '--') { options = false; break; }
+        if (!/^-[iF]+$/.test(arg)) return unchanged;
+      }
+      if (cursor < args.length) candidates = pathCandidates(prefix, normalizePath(state.cwd, '/'), fileSystem(), false);
+      else if (options && prefix.startsWith('-')) candidates = ['-F', '-i', '-iF'].filter(value => value.startsWith(prefix));
+    } else if (prefix.startsWith('-') && (command === 'find' || !args.includes('--'))) {
+      const options: Record<string, string[]> = {
+        ls: ['-a', '-l', '-al'], find: ['-name', '-type'], head: ['-n', '-0', '-5', '-10', '-20'],
+        tail: ['-n', '-0', '-5', '-10', '-20'], wc: ['-l', '-w', '-c', '-lw', '-lc', '-wc', '-lwc'],
+      };
+      candidates = (Object.hasOwn(options, command) ? options[command] : []).filter(value => value.startsWith(prefix));
+    } else if (command === 'tail' && !args.includes('--') && prefix.startsWith('+')) {
+      candidates = ['+1', '+10', '+20'].filter(value => value.startsWith(prefix));
+    } else if (['ls', 'cd', 'cat', 'tree', 'find', 'head', 'tail', 'wc', 'more', 'less', 'open'].includes(command)) {
+      if (command === 'find' && args.some(arg => arg === '-name' || arg === '-type')) return unchanged;
+      if (['more', 'less'].includes(command) && args.filter(arg => arg !== '--').length) return unchanged;
+      candidates = pathCandidates(prefix, normalizePath(state.cwd, '/'), fileSystem(), command === 'cd');
+      if (command === 'open' && !args.length && !prefix.includes('/')) {
+        candidates.push(...[...posts.map(post => post.id), ...projectFiles.map(file => basename(file.path).replace(/\.md$/, ''))].filter(id => id.startsWith(prefix)));
       }
     }
   }
