@@ -1,20 +1,9 @@
-import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { resolvePreviewURLs } from './homepage.mjs';
+
+// The compiled terminal uses ES modules and root-relative legacy URLs. Preview it over HTTP.
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const target = path.resolve(process.argv[2] || path.join(root, 'review/Sakauma-blogmaker-preview.html'));
-const read = file => fs.readFile(path.join(root, 'dist', file));
-const data = async (file, mime) => `data:${mime};base64,${(await read(file)).toString('base64')}`;
-let html = (await read('index.html')).toString();
-let css = (await read('css/home-editorial.css')).toString();
-css = css.replace('/assets/fonts/home-wenkai.woff2', await data('assets/fonts/home-wenkai.woff2', 'font/woff2'));
-html = html.replace(/\s*<link rel="preload"[^>]+>/, '');
-html = html.replace(/<link rel="stylesheet"[^>]+>/, `<style>${css}</style>`);
-html = html.replace(/\s*<script src="\/js\/home-editorial\.js[^>]*><\/script>/, '');
-html = html.replace('</body>', `<script>${(await read('js/home-editorial.js')).toString()}</script>\n</body>`);
-html = html.replace('/assets/img/home-tlaloc.webp', await data('assets/img/home-tlaloc.webp', 'image/webp'));
-html = resolvePreviewURLs(html);
-await fs.mkdir(path.dirname(target), { recursive: true });
-await fs.writeFile(target, html);
-console.log(`Wrote standalone preview: ${target}`);
+const port = process.argv[2] || '4173';
+if (!/^\d+$/.test(port) || Number(port) < 1 || Number(port) > 65535) throw new Error('Usage: node scripts/preview.mjs [port]');
+process.argv = [process.execPath, fileURLToPath(new URL('./serve.mjs', import.meta.url)), path.join(root, 'dist'), port];
+await import('./serve.mjs');

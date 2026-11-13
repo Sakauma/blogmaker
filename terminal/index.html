@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="dark">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, interactive-widget=resizes-content" />
+    <meta name="theme-color" content="#111314" />
+    <meta name="description" content="Sakauma / Egor Izmaylov，UESTC PhD 在读。翻译、诗歌、民防与未来主义。" />
+    <meta property="og:title" content="Sakauma | Egor Izmaylov" />
+    <meta property="og:description" content="我爱一切，不该爱的东西。翻译、诗歌、民防与未来主义。" />
+    <meta property="og:type" content="website" />
+    <link rel="icon" href="/assets/img/avatar.png" />
+    <title>Sakauma | Egor Izmaylov</title>
+    <script>
+      try {
+        const saved = localStorage.getItem('sakauma:cli:theme');
+        document.documentElement.dataset.theme = ['dark', 'light', 'amber'].includes(saved) ? saved : 'dark';
+        const motion = localStorage.getItem('sakauma:cli:motion');
+        document.documentElement.dataset.motion = motion === 'off' || (motion !== 'on' && matchMedia('(prefers-reduced-motion: reduce)').matches) ? 'off' : 'on';
+      } catch {
+        document.documentElement.dataset.motion = matchMedia('(prefers-reduced-motion: reduce)').matches ? 'off' : 'on';
+      }
+    </script>
+  </head>
+  <body>
+    <div id="app"></div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

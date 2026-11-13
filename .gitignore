@@ -5,3 +5,8 @@ dist/
 *.log
 
 .test-build-*/
+terminal/src/generated/content.json
+terminal/test-results/
+terminal/playwright-report/
+artifacts/
+review/

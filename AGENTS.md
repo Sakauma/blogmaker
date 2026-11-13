@@ -2,28 +2,41 @@
 
 ## 项目结构
 
-- 这个仓库是 Sakauma 静态站点的源码/构建仓库。
-- 当前生产基线是 `src/publish-snapshot/`，它保存了已部署 `Sakauma.github.io` 站点的完整快照。
-- `npm run build` 会删除 `dist/`，再把 `src/publish-snapshot/` 复制进去。现阶段，构建输出应与现有发布站保持部署级一致。
-- `content/posts/*.md` 和 `content/pages/*.md` 保存了已抽取的博客/页面源文件，供后续生成器使用；但它们目前还没有接入构建流程。
-- `src/templates/` 保存早期模板工作，目前也还没有接入 `scripts/build.mjs`。
+- 这个仓库是 Sakauma 静态站点的源码与构建仓库，发布仓库是 `Sakauma/Sakauma.github.io`。
+- `content/posts/*.md` 是文章原文，`content/pages/about.md` 是关于页面原文；历史中文、俄文、路径和正文必须原样保留。
+- `terminal/` 保存 TypeScript/Vite 终端源码、配置及浏览器测试。终端通过虚拟文件系统阅读文章、标签、分类、归档、联系信息和真实仓库介绍。
+- `scripts/terminal-content.mjs` 从原文生成 `terminal/src/generated/content.json`。该文件是共享数据契约，已被 Git 忽略；修改生成器或原文后重新生成。
+- `scripts/build.mjs` 编译终端，并为全部历史文章/索引/分页/别名生成独立 HTML 入口。每个入口有自己的标题、canonical、原文 HTML 回退和相同的终端程序。
+- `src/publish-snapshot/` 是历史路由、原文更新时间和静态资源的证据。`src/templates/home.html` 保存原首页内容，供静态回退使用。
+- `static/` 的文件按原路径覆盖复制到输出；Vite 使用 `terminal-assets/`，避免与历史 `assets/` 冲突。
 
 ## 常用命令
 
-- `npm run build` - 从 `src/publish-snapshot/` 构建 `dist/`。
-- `npm run dev` - 在 `http://127.0.0.1:4173/` 提供 `dist/` 的本地预览；如果 `dist/` 不存在或已过期，请先运行 `npm run build`。
-- `npm run verify:deploy-parity` - 将 `dist/` 与 `../Sakauma.github.io` 对比；需要相邻的部署仓库已经存在。
-- `npm run deploy:local` - 构建站点，把 `dist/` 复制到 `../Sakauma.github.io`，然后提交并推送。只有在用户明确要求时才运行。
+- `npm ci`：按 npm lock 安装依赖，需要 Node 22.12 或更新版本。
+- `npm run content`：只生成终端数据。
+- `npm run build`：生成数据、检查 TypeScript、编译全部站点到 `dist/`。
+- `npm run dev`：在 `http://127.0.0.1:4173/` 静态预览 `dist/`，先运行 build。
+- `npm run dev:terminal`：生成数据后启动终端 Vite 开发服务。
+- `npm test`：生成器、内容转换、原文与资源保留、路由和部署脚本测试。
+- `npm run test:terminal` / `npm run test:e2e`：终端命令与浏览器测试。
+- `npm run verify:deploy-parity`：重建后与相邻 `../Sakauma.github.io` 发布工作区逐文件比对。
+- `npm run deploy:local`：构建、镜像、提交并推送发布仓库。仅在用户明确要求发布时运行。
 
 ## 编辑规则
 
-- 不要编辑 `dist/`；它是生成产物，并且已被 git 忽略。
-- 除非任务明确要求修改，否则应原样保留非 ASCII 路径和内容。站点中包含中文和俄文标题、slug 以及正文。
-- 修改 `src/publish-snapshot/` 时要谨慎：它目前是部署一致性的权威来源。任何会影响站点输出的变更，都必须更新这个快照，或者先扩展生成器，让变更可以被稳定复现。
-- 除非有明确理由添加包，否则保持项目无额外依赖。`package.json` 目前没有依赖项。
-- 避免对生成快照中的 HTML/CSS 做大范围格式化；很小的字节级变化也可能破坏一致性预期。
+- 不直接编辑 `dist/` 和 `terminal/src/generated/content.json`；它们都是生成产物。
+- 保持原文源码和历史快照不变。迁移显示格式时改生成器，保留所有原始 URL、元数据、诗歌换行、PRE 缩进及链接。
+- Markdown 使用 marked，YAML 使用 yaml，HTML 转终端文字使用 parse5。避免用去标签正则代替 HTML 解析。
+- `updated` 优先读取作者显式值；旧文章没有该字段时读取对应历史快照中的“最近更新”；没有历史证据的新文章回退到 `date`。
+- 保留 `/list/index-1.html`、`/index/`、根分页、各年月归档、标签/分类分页、最近更新分页及 `404.html`。
+- JavaScript 成功初始化后移除 `#site-fallback`；初始化失败或禁用时显示原文与导航。历史脚本不放入回退内容执行。
+- Node/npm lock 是本仓库的依赖基线；依赖变更同时更新 `package.json` 与 `package-lock.json`。
+- 团队并行编辑时分开 terminal、生成器、测试与发布范围；提交前审阅完整差异并跑相应检查。
 
 ## 部署说明
 
-- GitHub Actions 会在推送到 `main` 时运行，使用 Node 22 构建，并通过 `DEPLOY_KEY` secret 将 `dist/` 推送到 `Sakauma/Sakauma.github.io`。
-- 本地部署脚本会拒绝未知的部署远程仓库，但仍然会推送到 `main`；请把它们当作发布命令对待。
+- `.github/workflows/deploy.yml` 仅由手动 `workflow_dispatch` 触发。推送源码 `main` 不会自动发布。
+- Actions 使用 Node 22、`npm ci`、构建与测试，通过 `DEPLOY_KEY` 推送发布仓库。
+- 本地部署脚本检查远程地址、main 分支、干净工作区和与 origin/main 一致，然后完整镜像 dist，保留目标 `.git`。它会提交并推送。
+- GitHub Pages 使用生成的 `.nojekyll`，旧中文/俄文目录保持实际文件路径，所有嵌套入口均引用根路径的终端资源。
+- 只在用户明确要求时提交或推送。构建、预览和测试不发布。

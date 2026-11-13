@@ -1,6 +1,11 @@
 {
   "scripts": {
-    "build": "node scripts/build.mjs",
+    "content": "node scripts/terminal-content.mjs",
+    "typecheck": "tsc --noEmit -p terminal/tsconfig.json",
+    "build": "npm run content && npm run typecheck && node scripts/build.mjs",
+    "dev:terminal": "npm run content && vite terminal --host 127.0.0.1 --port 4317 --strictPort",
+    "test:terminal": "node --import tsx --test terminal/src/shell.test.ts",
+    "test:e2e": "playwright test --config terminal/playwright.config.ts",
     "dev": "node scripts/serve.mjs dist 4173",
     "verify:deploy-parity": "npm run build && node scripts/verify-deploy-parity.mjs ../Sakauma.github.io",
     "deploy:local": "npm run build && node scripts/deploy-local.mjs ../Sakauma.github.io",
@@ -9,11 +14,20 @@
     "preview": "npm run build && node scripts/preview.mjs"
   },
   "dependencies": {
+    "@fontsource/ibm-plex-mono": "^5.2.0",
     "marked": "^15.0.12",
+    "parse5": "^8.0.0",
     "yaml": "^2.9.1"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.55.0",
+    "@types/node": "^24.5.2",
+    "tsx": "^4.20.5",
+    "typescript": "^5.9.2",
+    "vite": "^7.1.7"
   },
   "private": true,
   "engines": {
-    "node": ">=22"
+    "node": ">=22.12"
   }
 }
