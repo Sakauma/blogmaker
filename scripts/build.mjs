@@ -11,6 +11,16 @@ const terminal = path.join(root, 'terminal');
 // Validate content and create the shared data before Vite replaces the previous build.
 const { manifest, documents } = await generateTerminalContent(root);
 await fs.access(path.join(terminal, 'index.html'));
+// The private namespace contains one generated ciphertext, never loose public assets.
+for (const directory of ['src/publish-snapshot', 'static', 'terminal/public']) {
+  for (const reserved of ['.private', ...(directory === 'terminal/public' ? [] : ['private'])]) {
+    try { await fs.access(path.join(root, directory, reserved)); }
+    catch (error) { if (error.code === 'ENOENT') continue; throw error; }
+    throw new Error(`Reserved private directory found in public inputs: ${directory}/${reserved}`);
+  }
+}
+const privateAssets = await fs.readdir(path.join(terminal, 'public/private')).catch(error => { if (error.code === 'ENOENT') return []; throw error; });
+if (privateAssets.some(name => name !== 'vault.json')) throw new Error('Only the generated encrypted vault belongs in terminal/public/private.');
 const config = path.join(terminal, 'vite.config.ts');
 await viteBuild({
   root: terminal,
@@ -43,7 +53,7 @@ for (const [route, document] of documents) {
   const title = `${document.title}${route === '/' ? '' : ' | Sakauma'}`;
   const description = `${document.title} — ${manifest.profile.interests}`;
   const canonical = 'https://sakauma.github.io' + href(document.canonical);
-  const metadata = `<meta name="description" content="${e(description)}">\n<meta property="og:title" content="${e(title)}">\n<meta property="og:description" content="${e(description)}">\n<meta property="og:type" content="${route.startsWith('/20') ? 'article' : 'website'}">\n<link rel="canonical" href="${e(canonical)}">${route === '/404.html' ? '\n<meta name="robots" content="noindex">' : ''}`;
+  const metadata = `<meta name="description" content="${e(description)}">\n<meta property="og:title" content="${e(title)}">\n<meta property="og:description" content="${e(description)}">\n<meta property="og:type" content="${route.startsWith('/20') ? 'article' : 'website'}">\n<link rel="canonical" href="${e(canonical)}">${route === '/404.html' || route === '/private/' ? '\n<meta name="robots" content="noindex">' : ''}`;
   // Only the new terminal entry executes. Historical body markup remains readable if JS fails.
   const originalHTML = document.html
     .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, '')

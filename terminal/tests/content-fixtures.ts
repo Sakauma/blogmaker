@@ -54,10 +54,13 @@ export const sortedPostNames = (): string[] => posts.map((post) => basename(post
 export const sortedProjectNames = (): string[] => projectFiles.map((file) => basename(file.path)).sort();
 export function directoryNames(directory: string): string[] {
   const prefix = directory === '/' ? '/' : `${directory}/`;
-  return [...new Set(files.filter((file) => file.path.startsWith(prefix)).map((file) => {
+  const names = files.filter((file) => file.path.startsWith(prefix)).map((file) => {
     const relative = file.path.slice(prefix.length);
     return relative.includes('/') ? `${relative.split('/')[0]}/` : relative;
-  }))].sort();
+  });
+  // The encrypted vault has a public mount point, but no public child files.
+  if (directory === '/') names.push('private/');
+  return [...new Set(names)].sort();
 }
 
 interface HTMLNode { nodeName: string; value?: string; childNodes?: HTMLNode[] }

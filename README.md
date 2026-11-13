@@ -39,14 +39,13 @@ cat /categories/index.md
 cat /recent-updates/index.md
 cat /about.txt
 cat /contact.txt
-cat /assets.md
-ls projects
+cat /home.txt
 ascii donut
 ```
 
-`posts` 按日期显示全部文章标题，`search 关键词` 搜索标题和正文。文件名和文章标题可点击，文章从开头展开；Tab 补全命令、文档路径、参数和选项值，方向键选择历史命令。`/assets.md` 保留原首页 Tlaloc 插画和全部旧图片的资源链接；`projects/` 介绍真实源码与发布仓库。文章链接仍使用原永久 URL，直接打开会启动对应的 `cat` 命令。
+`posts` 按日期显示全部文章标题，`search 关键词` 搜索公开标题和正文。文件名和文章标题可点击，文章从开头展开；Tab 补全命令、文档路径、参数和选项值，方向键选择历史命令。首页、介绍、联系方式、70 篇既有日志及其标签/分类/归档保持公开。项目、实验、资源索引及内部说明已移入加密私密区。文章链接仍使用原永久 URL，直接打开会启动对应的 `cat` 命令。
 
-文档本身也可以作为命令：直接输入 `/posts/001-2026-01-21.md`、`./about.txt`、`contact` 或 `readme`，会清屏并从开头打开。`cat` 保留此前会话，继续使用整页自然滚动；`home`、`exit` 和空输入时的 Ctrl+D 返回首页与根目录，保留历史命令和主题偏好。
+文档本身也可以作为命令：直接输入 `/posts/001-2026-01-21.md`、`./about.txt`、`contact` 或 `about`，会清屏并从开头打开。`cat` 保留此前会话，继续使用整页自然滚动；`home`、`exit` 和空输入时的 Ctrl+D 返回首页与根目录，保留历史命令和主题偏好。
 
 ### 分页阅读
 
@@ -105,6 +104,44 @@ wc -l /about.txt /contact.txt
 | 搜索历史 | Ctrl+R；再次按查找上一条，Enter 选取，Esc 恢复草稿 |
 | 清屏 / 取消输入或字符动画 | Ctrl+L / Ctrl+C、Esc |
 
+## 私密资料
+
+网页输入 `unlock` 或点击底部 `unlock`，在独立密码框输入访问密码。解锁后用 `ls`、`cd`、`cat`、`less` 阅读 `/private/`，用 `download /private/路径` 下载原文件。直接访问 <https://sakauma.github.io/private/> 也会先显示密码框。`Esc` 或“取消”终止解锁，迟到的网络/解密结果会被丢弃。
+
+输入 `lock` 或点击底部 `lock` 会删除当前标签页的私密数据、正文、分页内容、补全、命令历史与搜索草稿，并返回公开首页；刷新、新标签页以及离开页面后均重新锁定。主题与动效偏好保留。密码只在独立输入框中处理，误输到 `unlock` 参数里的文字会被丢弃，页面不会将它写入命令历史、URL 或网络请求。
+
+网站发布的是 **AES-256-GCM 密文**，用 PBKDF2-SHA256（600000 次）从密码派生密钥；盐与 IV 每次随机生成，GCM 验证完整性。解密通过 HTTPS 下的 Web Crypto 在当前浏览器标签页完成。私密正文、附件数据与密钥不写入应用的 localStorage/sessionStorage，公开 JS、HTML 回退与索引只含公开内容和密文地址。私密入口禁用 JavaScript 时只显示已上锁提示。
+
+### 本地编辑与加密
+
+- `.private/password.txt`：本机访问密码，默认首次生成 24 字节随机值并编码为 32 字符。请单独备份或存入密码管理器。
+- `.private/files/`：本机可编辑的私密文件，与网站的 `/private/` 对应。放置 UTF-8 文本、Markdown 或附件；子目录保持原结构。
+- `private/vault.enc.json`：唯一提交到源码仓库的私密资料包，只含加密数据。构建将其复制为公开下载的密文；构建和部署都无需密码。
+
+`.private/` 整个目录已被 Git 忽略。私密资料放在这里；`content/`、`static/`、`src/` 和 `terminal/public/` 是公开源码或公开资源。公开 `content/` 中的 `draft: true` 仅控制页面发布，原文件仍会进入源码仓库。
+
+```sh
+# 查看本机状态，不输出密码或资料内容
+npm run vault -- status
+
+# 克隆现有仓库后：先恢复 .private/password.txt，再解密本地编辑副本
+npm run vault -- open
+
+# 编辑 .private/files/ 后，重新加密，再构建和发布
+npm run vault -- seal
+npm run build
+
+# 轮换为新随机密码：更新密文和本地密码文件
+npm run vault -- password
+npm run build
+```
+
+首次创建全新资料包才使用 `npm run vault -- init`；已存在的密文保持原样。指定自己的密码时，将至少 12 个字符的单行 UTF-8 文本放入 `.private/` 内的另一个文件，用 `npm run vault -- password --new-password-file .private/new-password.txt` 轮换。`--password-file PATH` 指定当前密码输入；`--new-password-file PATH` 指定新密码输入，外部输入文件不会被覆盖。实际生效密码始终同步保存到 `.private/password.txt`，不要把密码写成命令参数。
+
+`seal` 先认证旧包，再采集本地文件；本地编辑目录缺失时先 `open`。`open` 在写入前检查全部冲突，已有同字节文件保持不动，内容不同则停止。二进制附件保留原字节；文本保留 BOM、CRLF 和 Unicode。密文 JSON 上限 32 MiB，明文 JSON 上限略低于 24 MiB，附件还需计入 base64 开销，单个资料包最多 10000 个文件。
+
+轮换前的密文与旧密码备份到 `.private/backups/`。轮换针对上一次已保存的资料包，未 `seal` 的本地编辑不会自动发布。密码遗失且没有本地副本/备份时，没有找回接口。上锁保护新发布的密文；曾经公开的文章、图片、文件及 Git 历史副本仍可能被访问。改密码后，旧密码仍能打开对应的旧版本密文，因此请保管旧密码和备份。
+
 ## 新建文章
 
 ```sh
@@ -157,7 +194,7 @@ npm run test:e2e
 
 `content` 生成被忽略的 `terminal/src/generated/content.json`。`build` 先生成数据、检查 TypeScript，再由 Vite 编译终端并生成每个旧 URL 的页面；字体输出到 `terminal-assets/`，旧站资源保留在原位置。每个页面有独立 title、description、canonical 和 `#site-fallback` 原文回退。终端成功初始化后移除回退内容；关闭 JavaScript 时可直接阅读 HTML。
 
-共享契约包含 `version`、真实 `profile`、虚拟文本 `files`、文章元数据 `posts` 和 URL 到启动命令的 `routes`。文章文件路径稳定为 `/posts/<源文件名>.md`；目录由前端从文件路径递归推导。正文链接和索引链接使用 `[标题](URL)`，由终端显示为可点击文字。
+共享契约包含 `version`、真实 `profile`、虚拟文本 `files`、文章元数据 `posts` 和 URL 到启动命令的 `routes`。文章文件路径稳定为 `/posts/<源文件名>.md`；目录由前端从文件路径递归推导。正文链接和索引链接使用 `[标题](URL)`，由终端显示为可点击文字。配置私密区后，`vault.url` 只引用带密文哈希版本的资料包。私密文件的绝对/相对链接通过终端命令浏览或解密下载，管道和分页保留原文档的路径上下文，私密文件名不作为 HTTP 请求路径发送。
 
 `npm test` 在隔离目录验证全部历史入口、70 篇正文、静态资源字节、Markdown / HTML 转换、Unicode、新增 / 改分类 / 草稿 / 删除、原文哈希、历史更新时间和动态索引。部署测试使用模拟 Git，不连接远程；其中 POSIX shim 在 Windows 跳过。`test:terminal` 检查命令解释器，`test:e2e` 检查真实浏览器交互。浏览器测试使用已运行的服务器，默认 URL 为 `http://127.0.0.1:4317`，可通过 `BASE_URL` 指定完整构建的预览地址；浏览器通过 `BROWSER_CHANNEL` 选择。
 

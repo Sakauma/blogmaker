@@ -2,6 +2,7 @@ import { resolve } from 'node:path';
 import { test as base, expect, type Locator, type Page } from '@playwright/test';
 import { manifest, posts, profile, projectFiles, routes } from '../src/content';
 import { basename, chinesePost, directoryNames, fileLines, fileText, legacySourceFilenames, longestPost, originalTextRuns, poemPost, preformattedPoems, quote, russianPost, sortedPostNames, sourceForFile, sourcePosts, visibleContentLine, visibleFileLines } from './content-fixtures';
+import { PRIVATE_ATTACHMENT, PRIVATE_BYTES, PRIVATE_DOCUMENT, PRIVATE_FILES, PRIVATE_MARKER, PRIVATE_PDF, PRIVATE_PDF_BYTES, PRIVATE_PROJECT, PRIVATE_README, TAMPERED_ENVELOPE, VAULT_ENVELOPE, VAULT_PASSWORD, delayVaultDecrypt, installVaultFixture, privateLines, privateRootNames, releaseVaultDecrypt, type CapturedRequest } from './vault-fixtures';
 
 const DESKTOP = { width: 1440, height: 1000 };
 const MOBILE = { width: 390, height: 844 };
@@ -307,6 +308,89 @@ async function expectEditor(page: Page, value: string, start: number, end = star
   await expect(input(page)).toBeFocused();
 }
 
+const unlockForm = (page: Page): Locator => page.locator('form#unlock-form');
+const unlockPassword = (page: Page): Locator => unlockForm(page).locator('#unlock-password');
+const unlockStatus = (page: Page): Locator => unlockForm(page).locator('#unlock-status');
+const unlockSubmit = (page: Page): Locator => unlockForm(page).locator('#unlock-submit');
+const unlockCancel = (page: Page): Locator => unlockForm(page).locator('#unlock-cancel');
+const vaultCommand = (page: Page): Locator => page.locator('#vault-command');
+
+async function expectUnlockForm(page: Page): Promise<void> {
+  await expect(unlockForm(page)).toBeVisible();
+  await expect(form(page)).toBeHidden();
+  await expect(form(page).locator('#unlock-form')).toHaveCount(0);
+  await expect(unlockPassword(page)).toHaveAttribute('type', 'password');
+  await expect(unlockPassword(page)).toHaveAccessibleName('访问密码');
+  await expect(unlockStatus(page)).toHaveAttribute('role', 'status');
+  await expect(unlockSubmit(page)).toHaveAccessibleName('解锁');
+  await expect(unlockCancel(page)).toHaveAccessibleName('取消');
+  await expect(unlockCancel(page)).toBeEnabled();
+  await expect(page.locator('html')).toHaveAttribute('data-vault', 'locked');
+  await expect(page.locator('#command-input')).toHaveValue('');
+}
+
+async function beginUnlock(page: Page, command = 'unlock'): Promise<void> {
+  await input(page).fill(command);
+  await input(page).press('Enter');
+  await expectUnlockForm(page);
+}
+
+async function submitPassword(page: Page, password = VAULT_PASSWORD): Promise<void> {
+  await unlockPassword(page).fill(password);
+  await unlockSubmit(page).click();
+}
+
+async function unlockFixture(page: Page, command = 'unlock'): Promise<void> {
+  await beginUnlock(page, command);
+  await submitPassword(page);
+  await expect(page.locator('html')).toHaveAttribute('data-vault', 'unlocked');
+  await expect(unlockForm(page)).toBeHidden();
+  await expect(unlockPassword(page)).toHaveValue('');
+  await expect(vaultCommand(page)).toHaveText('lock');
+}
+
+async function expectLocked(page: Page): Promise<void> {
+  await expect(page.locator('html')).toHaveAttribute('data-vault', 'locked');
+  await expect(vaultCommand(page)).toHaveText('unlock');
+  expect((await page.locator('#terminal-log .output').allTextContents()).join('\n'), '包括隐藏输出在内都不应残留解密内容').not.toContain(PRIVATE_MARKER);
+}
+
+async function expectPasswordAbsent(page: Page, requests: CapturedRequest[], password = VAULT_PASSWORD): Promise<void> {
+  const stored = await page.evaluate(() => ({
+    html: document.documentElement.outerHTML,
+    text: document.body.textContent,
+    inputs: [...document.querySelectorAll('input, textarea')].map(node => (node as HTMLInputElement).value),
+    local: Object.fromEntries(Object.keys(localStorage).map(key => [key, localStorage.getItem(key)])),
+    session: Object.fromEntries(Object.keys(sessionStorage).map(key => [key, sessionStorage.getItem(key)])),
+  }));
+  for (const encoded of [password, encodeURIComponent(password), Buffer.from(password, 'utf8').toString('base64')]) {
+    expect(JSON.stringify(stored), '口令不应留在DOM、输入草稿或浏览器存储').not.toContain(encoded);
+    expect(JSON.stringify(requests), '口令不应通过URL、请求头或请求体发送').not.toContain(encoded);
+  }
+}
+
+async function expectClearedVault(page: Page): Promise<void> {
+  await expectLocked(page);
+  await expect(page).toHaveTitle('Sakauma | Egor Izmaylov');
+  expect(new URL(page.url()).pathname).toBe('/');
+  await expect(page.locator('#prompt-path')).toHaveText('~');
+  await expect(pager(page)).toHaveCount(0);
+  await expect(unlockForm(page)).toBeHidden();
+  await expect(unlockPassword(page)).toHaveValue('');
+  await expect(input(page)).toHaveValue('');
+  await expect(page.locator('#history-panel')).toBeHidden();
+  await expect(page.locator('#history-search')).toHaveValue('');
+  await expect(page.locator('#history-match')).toHaveText('');
+  await expect(page.locator('#completion-hints')).toBeHidden();
+  await expect(page.locator('#completion-hints')).toHaveText('');
+  const html = await page.locator('html').evaluate(node => node.outerHTML);
+  for (const file of PRIVATE_FILES) expect(html).not.toContain(file.path);
+}
+
+async function expectPrivateOutput(page: Page, path = PRIVATE_DOCUMENT): Promise<void> {
+  expect(await output(page).locator(':scope > .output-line').allTextContents()).toEqual(privateLines(path));
+}
+
 test('桌面首屏为深色纯终端，常驻命令行、滚动日志与按钮语义完整', async ({ page, pageErrors }) => {
   await page.setViewportSize(DESKTOP);
   await visit(page);
@@ -355,19 +439,16 @@ test('键入 Enter 与执行箭头均能运行命令，输出留在当前日志�
   await expectPureTerminal(page);
 });
 
-test('cat 读取真实 blogmaker 与 homepage 项目全文', async ({ page }) => {
+test('cat 读取公开主页介绍全文，默认锁定时没有私密项目数据', async ({ page }) => {
   await visit(page);
   const originalURL = page.url();
-  expect(projectFiles.map((file) => file.path).sort()).toEqual(['/projects/blogmaker.md', '/projects/homepage.md']);
-  for (const project of projectFiles) {
-    await test.step(project.path, async () => {
-      await runCommand(page, 'clear');
-      await runCommand(page, `cat ${quote(project.path)}`);
-      await expectFile(output(page), project.path);
-      await expect(page).toHaveURL(originalURL);
-      await expect(page.getByRole('dialog')).toHaveCount(0);
-    });
-  }
+  expect(projectFiles).toEqual([]);
+  await runCommand(page, 'clear');
+  await runCommand(page, 'cat /home.txt');
+  await expectFile(output(page), '/home.txt');
+  await expect(page).toHaveURL(originalURL);
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  await expect(page.locator('html')).toHaveAttribute('data-vault', 'locked');
   expect(page.context().pages()).toHaveLength(1);
 });
 
@@ -626,12 +707,12 @@ test('echo与命令错误中的Markdown标记保持纯文字，不生成内容�
 test('cd 改变提示路径，pwd 与相对文件读取使用同一个当前目录', async ({ page }) => {
   await visit(page);
   await expect(page.locator('#prompt-path')).toHaveText('~');
-  await runCommand(page, 'cd projects');
-  await expect(page.locator('#prompt-path')).toHaveText('~/projects');
+  await runCommand(page, 'cd posts');
+  await expect(page.locator('#prompt-path')).toHaveText('~/posts');
   await runCommand(page, 'pwd');
-  await expect(output(page)).toHaveText('/projects');
-  await runCommand(page, 'cat blogmaker.md');
-  await expectFile(output(page), '/projects/blogmaker.md');
+  await expect(output(page)).toHaveText('/posts');
+  await runCommand(page, `cat ${quote(basename(chinesePost.file))}`);
+  await expectFile(output(page), chinesePost.file);
   await runCommand(page, 'cd ..');
   await expect(page.locator('#prompt-path')).toHaveText('~');
   await runCommand(page, 'pwd');
@@ -657,7 +738,7 @@ test('tree 在日志展示目录树，短文件可直接 cat 而不导航或弹�
   await visit(page);
   const originalURL = page.url();
   await runCommand(page, 'tree');
-  for (const path of ['projects', 'blogmaker.md', 'posts', basename(chinesePost.file), 'contact.txt']) {
+  for (const path of ['private', 'home.txt', 'posts', basename(chinesePost.file), 'contact.txt']) {
     await expect(output(page)).toContainText(path);
   }
   await runCommand(page, 'cat contact.txt');
@@ -674,17 +755,17 @@ test('Tab 补全命令、目录与文件，Shift+Tab 可以离开输入行', asy
   await input(page).press('Tab');
   await expect(input(page)).toHaveValue('help ');
   await expect(input(page)).toBeFocused();
-  await input(page).fill('cd pro');
+  await input(page).fill('cd po');
   await input(page).press('Tab');
-  await expect(input(page)).toHaveValue('cd projects/');
-  await input(page).fill('cat projects/bl');
+  await expect(input(page)).toHaveValue('cd posts/');
+  await input(page).fill('cat ho');
   await input(page).press('Tab');
-  await expect(input(page)).toHaveValue('cat projects/blogmaker.md ');
+  await expect(input(page)).toHaveValue('cat home.txt ');
   await input(page).press('Shift+Tab');
   await expect(input(page)).not.toBeFocused();
   await input(page).focus();
   await input(page).press('Enter');
-  await expectFile(output(page), '/projects/blogmaker.md');
+  await expectFile(output(page), '/home.txt');
 });
 
 test('Tab 有多个候选时保留输入并在终端行内显示候选', async ({ page }) => {
@@ -973,7 +1054,7 @@ test('桌面截图：1440×1000 默认终端、真实命令会话与静态 ASCII
   await screenshot(page, 'desktop');
   await runCommand(page, 'clear');
   await runCommand(page, 'tree');
-  await expect(output(page)).toContainText('blogmaker.md');
+  await expect(output(page)).toContainText('home.txt');
   await runCommand(page, 'cat contact.txt');
   await expect(output(page)).toHaveText(/\S/);
   await expectInputUsable(page);
@@ -1579,6 +1660,445 @@ test('新增 head/tail、grep 正则与字面匹配、find 类型过滤返回真
   expect(await output(page).locator(':scope > .output-line').allTextContents()).toEqual(paths.slice(-3));
 });
 
+test.describe('私密保险库', () => {
+  test('默认只公开主页和文章，目录树、find、搜索与补全不暴露私密文件', async ({ page }) => {
+    const requests = await installVaultFixture(page);
+    await visit(page);
+    await expectLocked(page);
+    await expect(unlockForm(page)).toHaveAttribute('hidden', '');
+    expect(manifest.vault?.url).toMatch(/^\/private\/vault\.json\?v=/);
+    expect(projectFiles).toEqual([]);
+    expect(manifest.files.some(file => file.path.startsWith('/private/') || file.path.startsWith('/projects/'))).toBe(false);
+    for (const path of ['/README.md', '/assets.md', '/lab/README.txt']) {
+      expect(manifest.files.some(file => file.path === path)).toBe(false);
+    }
+    for (const command of ['ls /', 'tree /', 'find /']) {
+      await runCommand(page, command);
+      await expect(output(page)).toContainText('private');
+      for (const path of PRIVATE_FILES.map(file => basename(file.path))) await expect(output(page)).not.toContainText(path);
+      await expect(output(page)).not.toContainText(PRIVATE_MARKER);
+    }
+    await runCommand(page, `search ${PRIVATE_MARKER}`);
+    await expect(output(page)).toHaveText('');
+    await input(page).fill('cat /private/notes/sec');
+    await input(page).press('Tab');
+    await expect(input(page)).toHaveValue('cat /private/notes/sec');
+    await expect(page.locator('#completion-hints')).not.toContainText('secret.txt');
+    await expect(page.locator('#completion-hints')).not.toContainText('secrets-two.txt');
+    await input(page).fill('');
+    await expectPasswordAbsent(page, requests);
+  });
+
+  test('私密目录和命令访问均要求独立密码表单，取消保留公开会话', async ({ page }) => {
+    await installVaultFixture(page);
+    await visit(page);
+    await runCommand(page, 'echo public-before-vault');
+    for (const command of [
+      'private', 'cd /private', 'ls /private', 'tree /private', 'find /private', 'projects',
+      `cat ${quote(PRIVATE_DOCUMENT)}`, `less ${quote(PRIVATE_DOCUMENT)}`, `download ${quote(PRIVATE_ATTACHMENT)}`,
+    ]) {
+      await test.step(command, async () => {
+        await beginUnlock(page, command);
+        await expect(unlockPassword(page)).toHaveValue('');
+        await unlockCancel(page).click();
+        await expect(unlockForm(page)).toBeHidden();
+        await expectLocked(page);
+        await expect(input(page)).toBeFocused();
+        await expect(log(page)).toContainText('public-before-vault');
+      });
+    }
+  });
+
+  test('显式unlock正确解密后进入private并列目录，项目和相对文件正文可读取', async ({ page }) => {
+    const requests = await installVaultFixture(page);
+    await visit(page);
+    await unlockFixture(page);
+    await expect(page.locator('#prompt-path')).toHaveText('~/private');
+    for (const name of privateRootNames()) await expect(output(page)).toContainText(name);
+    await runCommand(page, 'pwd');
+    await expect(output(page)).toHaveText('/private');
+    await runCommand(page, 'cat notes/secret.txt');
+    await expectPrivateOutput(page);
+    await runCommand(page, 'projects');
+    await expect(output(page)).toContainText(basename(PRIVATE_PROJECT));
+    await runCommand(page, `cat ${quote(PRIVATE_PROJECT)}`);
+    await expectPrivateOutput(page, PRIVATE_PROJECT);
+    await expectPasswordAbsent(page, requests);
+    const vaultRequests = requests.filter(request => /\/private\/vault\.json\?/.test(request.url));
+    expect(vaultRequests.length).toBeGreaterThan(0);
+    expect(vaultRequests.every(request => request.method === 'GET' && request.body === null)).toBe(true);
+  });
+
+  test('待处理私密命令按原cwd解析相对路径，解锁后进入private并保留正文、链接与缩进', async ({ page }) => {
+    await installVaultFixture(page);
+    await visit(page);
+    for (const { cwd, path } of [
+      { cwd: '/', path: PRIVATE_DOCUMENT },
+      { cwd: '/', path: PRIVATE_DOCUMENT.slice(1) },
+      { cwd: '/posts', path: `..${PRIVATE_DOCUMENT}` },
+    ]) {
+      await runCommand(page, `cd ${quote(cwd)}`);
+      await unlockFixture(page, `cat ${quote(path)}`);
+      await expect(page.locator('#prompt-path')).toHaveText('~/private');
+      await expectPrivateOutput(page);
+      await expect(output(page).getByRole('link', { name: '公开文章索引', exact: true })).toHaveAttribute('href', '/list/');
+      const indented = output(page).locator(':scope > .output-line').filter({ hasText: '保留两个前导空格' });
+      expect(await indented.textContent()).toMatch(/^ {2}保留/);
+      await runCommand(page, 'lock');
+    }
+    await unlockFixture(page, 'cd /private/notes');
+    await expect(page.locator('#prompt-path')).toHaveText('~/private/notes');
+    await runCommand(page, 'cat secret.txt');
+    await expectPrivateOutput(page);
+  });
+
+  for (const corrupted of [false, true]) {
+    test(`${corrupted ? '认证标签不匹配的篡改密文' : '错误密码'}保持锁定并显示可重试的失败状态`, async ({ page }) => {
+      const requests = await installVaultFixture(page, corrupted ? TAMPERED_ENVELOPE : VAULT_ENVELOPE);
+      await visit(page);
+      await beginUnlock(page, `cat ${quote(PRIVATE_DOCUMENT)}`);
+      await submitPassword(page, corrupted ? VAULT_PASSWORD : 'synthetic-wrong-credential');
+      await expect(unlockStatus(page)).toHaveText(/失败|错误|无效|不正确|不匹配|损坏|认证/);
+      await expect(unlockSubmit(page)).toBeEnabled();
+      await expectUnlockForm(page);
+      await expectLocked(page);
+      await expect(page.locator('body')).not.toContainText(PRIVATE_MARKER);
+      await unlockCancel(page).click();
+      await expectPasswordAbsent(page, requests);
+      await runCommand(page, 'echo still-public-after-failure');
+      await expect(output(page)).toHaveText('still-public-after-failure');
+    });
+  }
+
+  test('私密文档直接执行和管道分页使用解密内容，公开链接仍可同页导航', async ({ page }) => {
+    await installVaultFixture(page);
+    await visit(page);
+    await runCommand(page, 'echo before-private-document');
+    await unlockFixture(page, quote(PRIVATE_DOCUMENT));
+    await expectPrivateOutput(page);
+    await expect(log(page).locator('.entry')).toHaveCount(1);
+    await expect(log(page)).not.toContainText('before-private-document');
+    await expectInsideViewport(page, output(page).locator(':scope > .output-line').first());
+    await startPager(page, `cat ${quote(PRIVATE_DOCUMENT)} | less`, 'less');
+    await expectPagerSlice(page, privateLines(PRIVATE_DOCUMENT));
+    await page.keyboard.press('G');
+    await expect(pager(page).locator('.pager-status')).toContainText('END');
+    await expectPagerSlice(page, privateLines(PRIVATE_DOCUMENT));
+    await page.keyboard.press('g');
+    await pagerContent(page).getByRole('link', { name: '公开文章索引', exact: true }).click();
+    await expect(pager(page)).toHaveCount(0);
+    await expectFile(output(page), '/posts/index.md');
+    expect(new URL(page.url()).pathname).toBe('/list/');
+    await expect(page.locator('html')).toHaveAttribute('data-vault', 'unlocked');
+  });
+
+  test('下载只使用解密后的附件字节，文件名和二进制内容完整', async ({ page }) => {
+    const requests = await installVaultFixture(page);
+    await visit(page);
+    await unlockFixture(page);
+    const pendingDownload = page.waitForEvent('download');
+    await runCommand(page, `download ${quote(PRIVATE_ATTACHMENT)}`);
+    const download = await pendingDownload;
+    expect(download.suggestedFilename()).toBe('fixture.bin');
+    expect(download.url()).toMatch(/^blob:/);
+    const stream = await download.createReadStream();
+    expect(stream).not.toBeNull();
+    const chunks: Buffer[] = [];
+    for await (const chunk of stream!) chunks.push(Buffer.from(chunk));
+    expect(Buffer.concat(chunks)).toEqual(PRIVATE_BYTES);
+    expect(await download.failure()).toBeNull();
+    await expectPasswordAbsent(page, requests);
+  });
+
+  test('unlock的quoted或escaped竖线属于参数，真实管道整体报错且口令始终脱敏', async ({ page }) => {
+    const requests = await installVaultFixture(page);
+    const secret = 'fixture-pipe|口令-only';
+    await visit(page);
+    for (const argument of [`"${secret}"`, quote(secret), secret.replace('|', '\\|')]) {
+      await beginUnlock(page, `unlock ${argument}`);
+      await expect(unlockPassword(page)).toHaveValue('');
+      await expect(log(page).locator('.entry').last()).toHaveAttribute('data-command-line', 'unlock');
+      await expectPasswordAbsent(page, requests, secret);
+      await unlockCancel(page).click();
+      await runCommand(page, 'history');
+      await expect(output(page)).toContainText('unlock');
+      await expectPasswordAbsent(page, requests, secret);
+    }
+    for (const command of [
+      `unlock ${quote(secret)} | echo PIPE_STAGE_MUST_NOT_EXECUTE`,
+      `echo PIPE_STAGE_MUST_NOT_EXECUTE | unlock ${quote(secret)}`,
+      'unlock | echo PIPE_STAGE_MUST_NOT_EXECUTE',
+      `unlock ${quote(secret)} |`,
+    ]) {
+      await runCommand(page, command);
+      await expect(unlockForm(page)).toBeHidden();
+      await expect(output(page).locator('.tone-error')).toHaveCount(1);
+      await expect(output(page)).not.toContainText('PIPE_STAGE_MUST_NOT_EXECUTE');
+      await expect(log(page).locator('.entry').last()).toHaveAttribute('data-command-line', 'unlock');
+      await expectLocked(page);
+      await expectPasswordAbsent(page, requests, secret);
+    }
+    await runCommand(page, 'history');
+    await expect(output(page)).not.toContainText('PIPE_STAGE_MUST_NOT_EXECUTE');
+    await expectPasswordAbsent(page, requests, secret);
+  });
+
+  test('私密Markdown链接从公共cwd经grep和less仍按源文件解析，站内读取下载不请求明文路径', async ({ page }) => {
+    const requests = await installVaultFixture(page);
+    const popups: Page[] = [];
+    page.context().on('page', popup => popups.push(popup));
+    await visit(page);
+    await unlockFixture(page);
+    for (const pipeline of [false, true]) {
+      for (const kind of ['text', 'attachment', 'directory'] as const) {
+        await test.step(`${pipeline ? 'cat | grep | less' : 'cat'} / ${kind}`, async () => {
+          await runCommand(page, 'cd /posts');
+          await expect(page.locator('#prompt-path')).toHaveText('~/posts');
+          if (pipeline) {
+            await startPager(page, `cat ${quote(PRIVATE_README)} | grep -F ${quote('私密链接')} | less`, 'less');
+            await expectPagerSlice(page, privateLines(PRIVATE_README).filter(line => line.includes('私密链接')));
+          } else {
+            await runCommand(page, `cat ${quote(PRIVATE_README)}`);
+            await expectPrivateOutput(page, PRIVATE_README);
+          }
+          const surface = pipeline ? pagerContent(page) : output(page);
+          await expect(surface.locator('a')).toHaveCount(0);
+          const relative = surface.getByRole('button', { name: '私密链接：相对正文', exact: true });
+          const attachment = surface.getByRole('button', { name: '私密链接：PDF 附件', exact: true });
+          const directory = surface.getByRole('button', { name: '私密链接：目录', exact: true });
+          await expect(relative).toHaveAttribute('data-command', /^cat\s/);
+          expect(await relative.getAttribute('data-command')).toContain(PRIVATE_DOCUMENT);
+          await expect(attachment).toHaveAttribute('data-command', /^download\s/);
+          expect(await attachment.getAttribute('data-command')).toContain(PRIVATE_PDF);
+          await expect(directory).toHaveAttribute('data-command', /^cd\s/);
+          expect(await directory.getAttribute('data-command')).toContain('/private/notes');
+          if (kind === 'text') {
+            await relative.click();
+            await expectPrivateOutput(page);
+            await expectInsideViewport(page, output(page).locator(':scope > .output-line').first());
+          } else if (kind === 'attachment') {
+            const pendingDownload = page.waitForEvent('download');
+            await attachment.click();
+            const download = await pendingDownload;
+            expect(download.suggestedFilename()).toBe(basename(PRIVATE_PDF));
+            expect(download.url()).toMatch(/^blob:/);
+            const stream = await download.createReadStream();
+            expect(stream).not.toBeNull();
+            const chunks: Buffer[] = [];
+            for await (const chunk of stream!) chunks.push(Buffer.from(chunk));
+            expect(Buffer.concat(chunks)).toEqual(PRIVATE_PDF_BYTES);
+            expect(await download.failure()).toBeNull();
+          } else {
+            await directory.click();
+            await expect(page.locator('#prompt-path')).toHaveText('~/private/notes');
+            await runCommand(page, 'pwd');
+            await expect(output(page)).toHaveText('/private/notes');
+          }
+          await expect(pager(page)).toHaveCount(0);
+          await expect(form(page)).toBeVisible();
+          expect(new URL(page.url()).pathname).toBe('/private/');
+          // Edge exposes its own downloads flyout as a Page, not a site popup.
+          const contentUrls = (pages: Page[]): string[] => pages.map(openPage => openPage.url()).filter(url => url !== 'edge://downloads-hub/');
+          expect(contentUrls(page.context().pages()), '私密链接不应打开额外内容页面').toEqual([page.url()]);
+          expect(contentUrls(popups), '记录任何站点弹出的内容页面').toEqual([]);
+        });
+      }
+    }
+    const privateRequests = requests.filter(request => {
+      const path = new URL(request.url).pathname;
+      return path.startsWith('/private/') && path !== '/private/' && path !== '/private/vault.json';
+    });
+    expect(privateRequests, '私密链接只操作解密VFS，不请求文件明文URL').toEqual([]);
+    for (const file of PRIVATE_FILES) {
+      expect(JSON.stringify(requests)).not.toContain(file.path);
+      expect(JSON.stringify(requests)).not.toContain(encodeURIComponent(file.path));
+    }
+    await expectPasswordAbsent(page, requests);
+  });
+
+  test('unlock附带参数只回显和记录unlock，口令不进入DOM、历史、存储或网络', async ({ page }) => {
+    const requests = await installVaultFixture(page);
+    await visit(page);
+    await beginUnlock(page, `unlock ${quote(VAULT_PASSWORD)}`);
+    await expect(unlockPassword(page)).toHaveValue('');
+    await expectPasswordAbsent(page, requests);
+    await unlockCancel(page).click();
+    await runCommand(page, 'history');
+    await expect(output(page).getByRole('button', { name: /\bunlock$/ })).toHaveCount(1);
+    await expect(output(page)).not.toContainText(VAULT_PASSWORD);
+    await unlockFixture(page);
+    await runCommand(page, 'history');
+    await expect(output(page)).not.toContainText(VAULT_PASSWORD);
+    await expectPasswordAbsent(page, requests);
+  });
+
+  for (const action of ['Escape', '取消按钮'] as const) {
+    test(`${action}可取消正在解密的请求，晚到的明文结果保持丢弃`, async ({ page }) => {
+      const requests = await installVaultFixture(page);
+      await delayVaultDecrypt(page);
+      await visit(page);
+      await beginUnlock(page, `cat ${quote(PRIVATE_DOCUMENT)}`);
+      await submitPassword(page);
+      await page.waitForFunction(() => Reflect.get(window, '__fixtureDecryptEntered') === true);
+      await expect(unlockCancel(page)).toBeEnabled();
+      if (action === 'Escape') await page.keyboard.press('Escape');
+      else await unlockCancel(page).click();
+      await expect(unlockForm(page)).toBeHidden();
+      await expectLocked(page);
+      await expect(input(page)).toBeFocused();
+      await expect(unlockPassword(page)).toHaveValue('');
+      await releaseVaultDecrypt(page);
+      await expectLocked(page);
+      await expect(page.locator('#prompt-path')).toHaveText('~');
+      await expect(unlockForm(page)).toBeHidden();
+      await expectPasswordAbsent(page, requests);
+      await runCommand(page, 'echo after-cancelled-decrypt');
+      await expect(output(page)).toHaveText('after-cancelled-decrypt');
+    });
+  }
+
+  for (const surface of ['pager', 'history-search', 'completion', 'draft'] as const) {
+    test(`lock从${surface}清除私密正文、历史、搜索、补全和草稿并重置公开状态`, async ({ page }) => {
+      const requests = await installVaultFixture(page);
+      await visit(page);
+      await runCommand(page, 'theme amber');
+      await unlockFixture(page, `cat ${quote(PRIVATE_DOCUMENT)}`);
+      await expectPrivateOutput(page);
+      if (surface === 'pager') {
+        await startPager(page, `less ${quote(PRIVATE_DOCUMENT)}`, 'less');
+        await expectPagerSlice(page, privateLines(PRIVATE_DOCUMENT));
+      } else if (surface === 'history-search') {
+        await input(page).press('Control+r');
+        await page.locator('#history-search').fill('secret');
+        await expect(page.locator('#history-match')).toContainText(PRIVATE_DOCUMENT);
+      } else if (surface === 'completion') {
+        await input(page).fill('cat /private/notes/sec');
+        await input(page).press('Tab');
+        await expect(page.locator('#completion-hints')).toBeVisible();
+        await expect(page.locator('#completion-hints')).toContainText('secret.txt');
+      } else await input(page).fill(`echo ${PRIVATE_MARKER} unsent-draft`);
+      await vaultCommand(page).click();
+      await expectClearedVault(page);
+      await expectTheme(page, 'amber');
+      await expectPasswordAbsent(page, requests);
+      await runCommand(page, 'history');
+      await expect(output(page)).not.toContainText('secret');
+      await expect(output(page)).not.toContainText('unlock');
+      await expect(output(page)).not.toContainText(PRIVATE_MARKER);
+      await input(page).fill('cat /private/notes/sec');
+      await input(page).press('Tab');
+      await expect(input(page)).toHaveValue('cat /private/notes/sec');
+      await expect(page.locator('#completion-hints')).not.toContainText('secret.txt');
+      await input(page).fill('');
+      await runCommand(page, 'find /');
+      await expect(output(page)).not.toContainText(PRIVATE_DOCUMENT);
+      await runCommand(page, `search ${PRIVATE_MARKER}`);
+      await expect(output(page)).toHaveText('');
+      await beginUnlock(page, `cat ${quote(PRIVATE_DOCUMENT)}`);
+      await unlockCancel(page).click();
+      await expectLocked(page);
+    });
+  }
+
+  test('lock命令与刷新都重新锁定，浏览器存储中没有解密内容和口令', async ({ page }) => {
+    const requests = await installVaultFixture(page);
+    await visit(page);
+    await unlockFixture(page, `cat ${quote(PRIVATE_DOCUMENT)}`);
+    await runCommand(page, 'lock');
+    await expectClearedVault(page);
+    await unlockFixture(page, `cat ${quote(PRIVATE_DOCUMENT)}`);
+    await expectPrivateOutput(page);
+    await page.reload();
+    await expect(page.locator('html')).toHaveClass(/\bapp-ready\b/);
+    await expectLocked(page);
+    await expectPasswordAbsent(page, requests);
+    const storage = await page.evaluate(() => JSON.stringify({ ...localStorage, ...sessionStorage }));
+    expect(storage).not.toContain(PRIVATE_MARKER);
+    expect(storage).not.toContain(PRIVATE_BYTES.toString('base64'));
+    if (await unlockForm(page).isVisible()) await unlockCancel(page).click();
+    await beginUnlock(page, `cat ${quote(PRIVATE_DOCUMENT)}`);
+    await expectLocked(page);
+  });
+
+  test('pagehide清除已解密数据，返回页面后私密访问仍要求新口令', async ({ page }) => {
+    await installVaultFixture(page);
+    await visit(page);
+    await unlockFixture(page, `cat ${quote(PRIVATE_DOCUMENT)}`);
+    await expectPrivateOutput(page);
+    await page.evaluate(() => window.dispatchEvent(new PageTransitionEvent('pagehide', { persisted: true })));
+    await expectLocked(page);
+    expect(await page.locator('html').evaluate(node => node.outerHTML)).not.toContain(PRIVATE_DOCUMENT);
+    await expect(unlockPassword(page)).toHaveValue('');
+    await beginUnlock(page, `cat ${quote(PRIVATE_DOCUMENT)}`);
+    await expectUnlockForm(page);
+  });
+
+  test('private旧式直达入口初始保持锁定，成功解锁后才列出私密目录', async ({ page }) => {
+    await installVaultFixture(page);
+    const response = await page.goto('/private/');
+    expect(response?.ok()).toBe(true);
+    await expect(page.locator('html')).toHaveClass(/\bapp-ready\b/);
+    await expectLocked(page);
+    await expectUnlockForm(page);
+    expect(new URL(page.url()).pathname).toBe('/private/');
+    await submitPassword(page);
+    await expect(page.locator('html')).toHaveAttribute('data-vault', 'unlocked');
+    await expect(page.locator('#prompt-path')).toHaveText('~/private');
+    for (const name of privateRootNames()) await expect(output(page)).toContainText(name);
+    await runCommand(page, 'cat notes/secret.txt');
+    await expectPrivateOutput(page);
+    await vaultCommand(page).click();
+    await expectClearedVault(page);
+  });
+
+  test('密码框保留原生选区复制和IME行为，终端快捷键不读取或修改口令', async ({ page }) => {
+    const requests = await installVaultFixture(page);
+    await visit(page);
+    await runCommand(page, 'echo public-history-before-password');
+    await beginUnlock(page);
+    await unlockPassword(page).fill(VAULT_PASSWORD);
+    await unlockPassword(page).press('Control+a');
+    expect(await unlockPassword(page).evaluate(node => {
+      const field = node as HTMLInputElement;
+      return [field.selectionStart, field.selectionEnd];
+    })).toEqual([0, VAULT_PASSWORD.length]);
+    await page.evaluate(() => {
+      const copyProbe = (event: KeyboardEvent): void => {
+        if (event.ctrlKey && event.key.toLowerCase() === 'c') {
+          Reflect.set(window, '__passwordCopyPrevented', event.defaultPrevented);
+          document.removeEventListener('keydown', copyProbe);
+        }
+      };
+      document.addEventListener('keydown', copyProbe);
+    });
+    await unlockPassword(page).press('Control+c');
+    await expectUnlockForm(page);
+    await expect(unlockPassword(page)).toHaveValue(VAULT_PASSWORD);
+    await expect(unlockPassword(page)).toBeFocused();
+    expect(await page.evaluate(() => Reflect.get(window, '__passwordCopyPrevented'))).toBe(false);
+    const probes = await unlockPassword(page).evaluate(node => {
+      const field = node as HTMLInputElement;
+      field.setSelectionRange(2, 2);
+      return [false, true].flatMap(composing => ['a', 'e', 'k', 'u', 'w', 'b', 'f', 'p', 'n', 'd', 'l', 'r', ...(composing ? ['Enter'] : [])].map(key => {
+        const event = new KeyboardEvent('keydown', {
+          key, ctrlKey: key !== 'Enter', bubbles: true, cancelable: true,
+          isComposing: composing, keyCode: composing ? 229 : 0,
+        });
+        field.dispatchEvent(event);
+        return { prevented: event.defaultPrevented, value: field.value, start: field.selectionStart, end: field.selectionEnd };
+      }));
+    });
+    for (const probe of probes) expect(probe).toEqual({ prevented: false, value: VAULT_PASSWORD, start: 2, end: 2 });
+    await expect(unlockForm(page)).toBeVisible();
+    await expect(page.locator('#history-panel')).toBeHidden();
+    await unlockCancel(page).click();
+    await expectPasswordAbsent(page, requests);
+    await runCommand(page, 'history');
+    await expect(output(page)).toContainText('echo public-history-before-password');
+    await expect(output(page)).not.toContainText(VAULT_PASSWORD);
+  });
+});
+
 test.describe('390×844 手机终端', () => {
   test.use({ viewport: MOBILE, isMobile: true, hasTouch: true, deviceScaleFactor: 1 });
 
@@ -1645,6 +2165,33 @@ test.describe('390×844 手机终端', () => {
     await expect(output(page)).toHaveText('scrollback-returned');
     await expectInputUsable(page);
     await expectNoHorizontalOverflow(page);
+  });
+
+  test('手机密码表单、解锁与重新上锁均可触摸操作，320px下无横向溢出', async ({ page }) => {
+    const requests = await installVaultFixture(page);
+    await visit(page);
+    await vaultCommand(page).tap();
+    await expectUnlockForm(page);
+    await page.setViewportSize({ width: 320, height: 640 });
+    await expectNoHorizontalOverflow(page);
+    for (const control of [unlockPassword(page), unlockSubmit(page), unlockCancel(page)]) await expectInsideViewport(page, control);
+    await unlockPassword(page).fill(VAULT_PASSWORD);
+    await unlockSubmit(page).tap();
+    await expect(page.locator('html')).toHaveAttribute('data-vault', 'unlocked');
+    await expect(unlockForm(page)).toBeHidden();
+    await expect(unlockPassword(page)).toHaveValue('');
+    await expect(page.locator('#prompt-path')).toHaveText('~/private');
+    for (const name of privateRootNames()) await expect(output(page)).toContainText(name);
+    await input(page).fill(`more ${quote(PRIVATE_DOCUMENT)}`);
+    await submit(page).tap();
+    await expect(page.locator('html')).toHaveAttribute('data-pager-active', 'true');
+    await expectPagerSlice(page, privateLines(PRIVATE_DOCUMENT));
+    await expectPagerWidth(page);
+    await vaultCommand(page).tap();
+    await expectClearedVault(page);
+    await expectPasswordAbsent(page, requests);
+    await expectNoHorizontalOverflow(page);
+    await expectInputUsable(page);
   });
 
   test('手机使用原生按钮前后翻页和退出，320px下可到达末页且禁用下一页', async ({ page }) => {

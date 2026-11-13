@@ -10,3 +10,5 @@ terminal/test-results/
 terminal/playwright-report/
 artifacts/
 review/
+.private/
+terminal/public/private/

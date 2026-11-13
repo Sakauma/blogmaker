@@ -1,15 +1,19 @@
-import { files, posts, projectFiles, routeFor } from './content';
+import { files, isVaultUnlocked, onFilesChanged, posts, projectFiles, routeFor } from './content';
+import type { ContentFile } from './content';
 
 export type Theme = 'dark' | 'light' | 'amber';
 export interface ShellState { cwd: string; theme: Theme; motion: boolean }
 export type Tone = 'plain' | 'muted' | 'accent' | 'warning' | 'error' | 'directory';
-export interface ShellLine { text: string; tone?: Tone; command?: string; markup?: boolean }
+export interface ShellLine { text: string; tone?: Tone; command?: string; markup?: boolean; sourceFile?: string }
 export type Effect =
   | { type: 'clear' }
   | { type: 'banner' }
   | { type: 'history' }
   | { type: 'home' }
   | { type: 'document' }
+  | { type: 'unlock'; command?: string }
+  | { type: 'lock' }
+  | { type: 'download'; file: string }
   | { type: 'pager'; mode: 'more' | 'less'; label: string }
   | { type: 'ascii'; mode: 'donut' | 'matrix' | 'off' };
 export interface ShellResult { lines: ShellLine[]; state: ShellState; effect?: Effect; file?: string }
@@ -20,25 +24,36 @@ const COMMANDS = [
   'about', 'ascii', 'banner', 'cat', 'cd', 'clear', 'coffee', 'contact', 'date', 'echo', 'exit',
   'find', 'grep', 'head', 'help', 'history', 'home', 'less', 'ls', 'matrix', 'more', 'motion', 'neofetch',
   'notes', 'open', 'posts', 'projects', 'pwd', 'readme', 'search', 'sudo', 'tags', 'tail', 'categories', 'archives', 'theme', 'tree', 'wc', 'whoami',
+  'unlock', 'lock', 'private', 'download',
 ] as const;
 const COMMAND_SET = new Set<string>(COMMANDS);
+const OWNER_COMMANDS = new Set<string>(['projects', 'readme', 'download', 'lock']);
 const THEMES: Theme[] = ['dark', 'light', 'amber'];
 const ASCII_MODES = ['donut', 'matrix', 'off'] as const;
 
-type Entry = { path: string; kind: 'directory' } | { path: string; kind: 'file'; text: string };
+type Entry = { path: string; kind: 'directory' } | (ContentFile & { kind: 'file' });
 type FileSystem = Map<string, Entry>;
 interface Token { value: string; start: number; end: number }
 interface Source { path?: string; lines: ShellLine[]; text: string }
 interface Plan { kind: 'text' | 'standalone' | 'pager'; run: (stdin?: ShellLine[]) => ShellResult }
 class ShellError extends Error {}
+export class LockedError extends ShellError {
+  constructor() { super('private: locked. Run unlock to read private files.'); this.name = 'LockedError'; }
+}
 
 function fail(message: string): never { throw new ShellError(message); }
+function privatePath(path: string): boolean { return path === '/private' || path.startsWith('/private/'); }
+function requireUnlocked(): void { if (!isVaultUnlocked()) throw new LockedError(); }
+function guardPath(path: string): void { if (privatePath(path)) requireUnlocked(); }
 function textLines(text: string): ShellLine[] {
   if (!text) return [];
   return text.replace(/\n$/, '').split('\n').map((line) => ({ text: line }));
 }
 function buildFileSystem(): FileSystem {
-  const fs: FileSystem = new Map([['/', { path: '/', kind: 'directory' }]]);
+  const fs: FileSystem = new Map([
+    ['/', { path: '/', kind: 'directory' }],
+    ['/private', { path: '/private', kind: 'directory' }],
+  ]);
   for (const file of files) {
     const parts = file.path.split('/').filter(Boolean);
     for (let depth = 1; depth < parts.length; depth++) {
@@ -49,8 +64,21 @@ function buildFileSystem(): FileSystem {
   }
   return fs;
 }
-const contentFileSystem = buildFileSystem();
-function fileSystem(): FileSystem { return contentFileSystem; }
+let cachedFiles: typeof files | undefined;
+let cachedFileSystem: FileSystem | undefined;
+onFilesChanged(() => {
+  // Clear synchronously so locking drops even the previous Map's attachment/text references.
+  cachedFileSystem?.clear();
+  cachedFileSystem = undefined;
+  cachedFiles = undefined;
+});
+function fileSystem(): FileSystem {
+  if (cachedFiles !== files || !cachedFileSystem) {
+    cachedFileSystem = buildFileSystem();
+    cachedFiles = files;
+  }
+  return cachedFileSystem;
+}
 
 function normalizePath(path: string, cwd: string): string {
   let expanded = path;
@@ -73,6 +101,7 @@ function children(fs: FileSystem, path: string): Entry[] {
 }
 function getEntry(fs: FileSystem, path: string, cwd: string, command: string): Entry {
   const resolved = normalizePath(path, cwd);
+  guardPath(resolved);
   const entry = fs.get(resolved);
   if (!entry) fail(`${command}: ${path}: no such file or directory`);
   return entry;
@@ -91,7 +120,7 @@ function entryLine(entry: Entry, label: string): ShellLine {
   return {
     text: label,
     tone: entry.kind === 'directory' ? 'directory' : 'plain',
-    command: `${entry.kind === 'directory' ? 'cd' : 'cat'} ${quoteArgument(entry.path)}`,
+    command: entry.path === '/private' ? 'private' : `${entry.kind === 'directory' ? 'cd' : 'cat'} ${quoteArgument(entry.path)}`,
   };
 }
 
@@ -135,6 +164,19 @@ function tokenize(input: string, partial = false): Token[][] {
   if (stages.length > 1 && !stages[stages.length - 1].length && !partial) fail('syntax: empty pipeline command');
   return stages;
 }
+/** Identify password-bearing command input for UI redaction without executing or exposing its arguments. */
+export function passwordCommandInput(raw: string, standaloneOnly = false): boolean {
+  try {
+    const stages = tokenize(raw);
+    return (!standaloneOnly || stages.length === 1) && stages.some(stage => stage[0]?.value === 'unlock');
+  } catch (error) {
+    if (!(error instanceof ShellError)) throw error;
+    // A partial opening quote may combine unlock and its arguments into one unfinished token.
+    const stages = tokenize(raw, true);
+    return (!standaloneOnly || stages.length === 1) && stages.some(stage => /^unlock(?:\s|$)/.test(stage[0]?.value ?? ''));
+  }
+}
+
 function expectArgs(args: string[], min: number, max: number, usage: string): void {
   if (args.length < min || args.length > max) fail(`usage: ${usage}`);
 }
@@ -186,7 +228,7 @@ const HELP = [
   'cd [path] · pwd               move through directories / print your path',
   'home · exit                  return to the homepage; keep theme and motion',
   'cat file [file ...]           read complete text (or piped input)',
-  './file.md · contact · readme  open a document from the beginning',
+  './file.md · contact          open a document from the beginning',
   'more [file] · less [file]     page a complete file or piped text',
   'tree [path]                  explore the virtual filesystem',
   'find [paths...] [-name GLOB] [-type f|d]  match names (* ? []) and kinds',
@@ -203,13 +245,22 @@ const HELP = [
   'whoami · date · coffee       visitor / current time / a small break',
   'posts · notes                list all articles with titles',
   'search text                  search article titles and full text',
-  'about · projects             personal introduction / source projects',
+  'about                        personal introduction',
+  'unlock · private             unlock private documents / browse private files',
   'tags · categories · archives browse the article indexes',
   'open id|path|url             read an article by id or published URL',
   '',
   'Tab completes commands, options, values and paths. Quotes and escapes preserve spaces.',
   'Text filters accept piped input: posts | grep 雷鬼 | wc -l',
   'A pager must finish a pipeline: cat about.txt | less',
+];
+
+const OWNER_HELP = [
+  '',
+  'Private documents · unlocked',
+  'readme · projects            owner notes / private source projects',
+  'download file                download text or an attached binary file',
+  'lock                         clear private documents and lock the vault',
 ];
 
 function prepare(words: string[], state: ShellState, fs: FileSystem, receivesInput: boolean, inPipeline: boolean): Plan {
@@ -222,7 +273,7 @@ function prepare(words: string[], state: ShellState, fs: FileSystem, receivesInp
     // Resolve every source now: no command in the pipeline executes until all plans are valid.
     const inputs = paths.map((path) => {
       const file = getFile(fs, path, state.cwd, name);
-      return { path, text: file.text, lines: textLines(file.text).map(line => ({ ...line, markup: true })) };
+      return { path, text: file.text, lines: textLines(file.text).map(line => ({ ...line, markup: true, ...(privatePath(file.path) ? { sourceFile: file.path } : {}) })) };
     });
     return (stdin = []) => inputs.length ? inputs : [{
       lines: stdin,
@@ -240,7 +291,9 @@ function prepare(words: string[], state: ShellState, fs: FileSystem, receivesInp
     } };
   };
   if (!COMMAND_SET.has(command)) {
-    const entry = fs.get(normalizePath(command, state.cwd));
+    const path = normalizePath(command, state.cwd);
+    guardPath(path);
+    const entry = fs.get(path);
     if (!entry) fail(`${command}: command not found. Type help.`);
     if (entry.kind === 'directory') fail(`${command}: is a directory`);
     noArgs(args, command);
@@ -249,9 +302,27 @@ function prepare(words: string[], state: ShellState, fs: FileSystem, receivesInp
   switch (command) {
     case 'help':
       noArgs(args, command);
-      return pure(() => HELP.map((text) => ({ text })));
+      return pure(() => [...HELP, ...(isVaultUnlocked() ? OWNER_HELP : [])].map((text) => ({ text })));
+    case 'unlock':
+      noArgs(args, command);
+      return effectPlan({ type: 'unlock' });
+    case 'lock':
+      noArgs(args, command);
+      return { kind: 'standalone', run: () => result([], privatePath(state.cwd) ? { ...state, cwd: '/' } : state, { type: 'lock' }) };
+    case 'private':
+      noArgs(args, command);
+      requireUnlocked();
+      return prepare(['ls', '/private'], state, fs, receivesInput, inPipeline);
+    case 'download': {
+      const parsed = positional(args, [], command);
+      expectArgs(parsed.rest, 1, 1, 'download file');
+      requireUnlocked();
+      const file = getFile(fs, parsed.rest[0], state.cwd, command);
+      return effectPlan({ type: 'download', file: file.path });
+    }
     case 'pwd':
       noArgs(args, command);
+      guardPath(state.cwd);
       return pure(() => [{ text: state.cwd }]);
     case 'cd': {
       expectArgs(args, 0, 1, 'cd [path]');
@@ -301,11 +372,13 @@ function prepare(words: string[], state: ShellState, fs: FileSystem, receivesInp
     case 'contact':
     case 'readme':
       noArgs(args, command);
-      return documentPlan(command === 'contact' ? '/contact.txt' : '/README.md');
+      return documentPlan(command === 'contact' ? '/contact.txt' : '/private/README.md');
     case 'about':
       noArgs(args, command);
       return prepare(['cat', '/about.txt'], state, fs, receivesInput, inPipeline);
     case 'projects':
+      noArgs(args, command);
+      return prepare(['ls', '/private/projects'], state, fs, receivesInput, inPipeline);
     case 'tags':
     case 'categories':
     case 'archives':
@@ -336,7 +409,15 @@ function prepare(words: string[], state: ShellState, fs: FileSystem, receivesInp
           urlPath = url.pathname;
         } catch (error) { if (error instanceof ShellError) throw error; fail('open: invalid article URL'); }
       }
+      let decodedPath = urlPath;
+      try { decodedPath = decodeURIComponent(urlPath); } catch { /* Keep invalid URI text as a literal VFS path. */ }
+      const resolved = normalizePath(decodedPath, state.cwd);
       const route = routeFor(urlPath);
+      if (!post && !project && privatePath(resolved)) {
+        guardPath(resolved);
+        const file = resolved + (decodedPath.endsWith('/') ? '/' : '');
+        return prepare(resolved === '/private' || route?.command === 'private' ? ['private'] : ['cat', '--', file], state, fs, receivesInput, inPipeline);
+      }
       if (!post && !project && route) {
         const routeTokens = tokenize(route.command);
         return prepare(routeTokens[0].map(token => token.value), state, fs, receivesInput, inPipeline);
@@ -536,9 +617,11 @@ function prepare(words: string[], state: ShellState, fs: FileSystem, receivesInp
 
 export function runCommand(input: string, state: ShellState): ShellResult {
   const original: ShellState = { ...state, cwd: normalizePath(state.cwd, '/') };
+  let inPipeline = false;
   try {
     if (input.length > INPUT_LIMIT) fail(`input: maximum length is ${INPUT_LIMIT} characters`);
     const stages = tokenize(input);
+    inPipeline = stages.length > 1;
     if (stages.length === 1 && !stages[0].length) return { lines: [], state: original };
     const fs = fileSystem();
     const plans = stages.map((tokens, index) => prepare(tokens.map((token) => token.value), original, fs, index > 0, stages.length > 1));
@@ -557,6 +640,7 @@ export function runCommand(input: string, state: ShellState): ShellResult {
     return output;
   } catch (error) {
     if (!(error instanceof ShellError)) throw error;
+    if (error instanceof LockedError && !inPipeline) return { lines: [], state: original, effect: { type: 'unlock', command: input } };
     return { lines: [{ text: error.message, tone: 'error' }], state: original };
   }
 }
@@ -580,7 +664,9 @@ function pathCandidates(prefix: string, cwd: string, fs: FileSystem, directories
   const slash = prefix.lastIndexOf('/');
   const directoryPart = slash === -1 ? '' : prefix.slice(0, slash + 1);
   const namePart = prefix.slice(slash + 1);
-  const directory = fs.get(normalizePath(directoryPart || '.', cwd));
+  const directoryPath = normalizePath(directoryPart || '.', cwd);
+  if (!isVaultUnlocked() && privatePath(directoryPath)) return [];
+  const directory = fs.get(directoryPath);
   if (!directory || directory.kind !== 'directory') return [];
   return children(fs, directory.path)
     .filter((entry) => (!directoriesOnly || entry.kind === 'directory') && basename(entry.path).startsWith(namePart))
@@ -600,13 +686,13 @@ export function completeCommand(input: string, state: ShellState): { value: stri
   const raw = input.slice(current.start);
   let candidates: string[] = [];
   if (!before.length) candidates = [
-    ...COMMANDS.filter(command => command.startsWith(prefix)),
+    ...COMMANDS.filter(command => command.startsWith(prefix) && (isVaultUnlocked() || !OWNER_COMMANDS.has(command))),
     ...pathCandidates(prefix, normalizePath(state.cwd, '/'), fileSystem(), false),
   ];
   else {
     const command = before[0].value;
     const args = before.slice(1).map((token) => token.value);
-    if (!COMMAND_SET.has(command)) return unchanged;
+    if (!COMMAND_SET.has(command) || !isVaultUnlocked() && OWNER_COMMANDS.has(command)) return unchanged;
     if (command === 'theme' && !args.length) candidates = THEMES.filter((value) => value.startsWith(prefix));
     else if (command === 'motion' && !args.length) candidates = ['off', 'on'].filter((value) => value.startsWith(prefix));
     else if (command === 'ascii' && !args.length) candidates = ASCII_MODES.filter((value) => value.startsWith(prefix));
@@ -636,9 +722,9 @@ export function completeCommand(input: string, state: ShellState): { value: stri
       candidates = (Object.hasOwn(options, command) ? options[command] : []).filter(value => value.startsWith(prefix));
     } else if (command === 'tail' && !args.includes('--') && prefix.startsWith('+')) {
       candidates = ['+1', '+10', '+20'].filter(value => value.startsWith(prefix));
-    } else if (['ls', 'cd', 'cat', 'tree', 'find', 'head', 'tail', 'wc', 'more', 'less', 'open'].includes(command)) {
+    } else if (['ls', 'cd', 'cat', 'tree', 'find', 'head', 'tail', 'wc', 'more', 'less', 'open', 'download'].includes(command)) {
       if (command === 'find' && args.some(arg => arg === '-name' || arg === '-type')) return unchanged;
-      if (['more', 'less'].includes(command) && args.filter(arg => arg !== '--').length) return unchanged;
+      if (['more', 'less', 'download'].includes(command) && args.filter(arg => arg !== '--').length) return unchanged;
       candidates = pathCandidates(prefix, normalizePath(state.cwd, '/'), fileSystem(), command === 'cd');
       if (command === 'open' && !args.length && !prefix.includes('/')) {
         candidates.push(...[...posts.map(post => post.id), ...projectFiles.map(file => basename(file.path).replace(/\.md$/, ''))].filter(id => id.startsWith(prefix)));

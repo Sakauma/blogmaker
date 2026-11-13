@@ -1,6 +1,7 @@
 {
   "scripts": {
     "content": "node scripts/terminal-content.mjs",
+    "vault": "node scripts/vault.mjs",
     "typecheck": "tsc --noEmit -p terminal/tsconfig.json",
     "build": "npm run content && npm run typecheck && node scripts/build.mjs",
     "dev:terminal": "npm run content && vite terminal --host 127.0.0.1 --port 4317 --strictPort",

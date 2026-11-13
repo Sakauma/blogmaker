@@ -64,10 +64,14 @@ test('shared manifest preserves the migration baseline and every currently publi
   assert.equal(files.size, manifest.files.length, 'VFS paths are unique');
   assert.ok(files.get('/about.txt').includes('ajax_mao@163.com'));
   assert.ok(files.get('/about.txt').includes('在精神上感染了艾滋病'));
-  assert.ok(files.get('/assets.md').includes('/assets/img/home-tlaloc.webp'));
-  assert.ok(files.get('/projects/blogmaker.md').includes('https://github.com/Sakauma/blogmaker'));
-  assert.ok(files.get('/projects/homepage.md').includes('https://github.com/Sakauma/Sakauma.github.io'));
-  assert.ok(!files.has('/projects/mindspace.md'));
+  assert.ok(files.has('/home.txt'));
+  for (const privatePath of ['/README.md', '/assets.md', '/projects/blogmaker.md', '/projects/homepage.md', '/lab/README.txt']) {
+    assert.ok(!files.has(privatePath), `old owner document removed from public manifest: ${privatePath}`);
+  }
+  assert.ok(!manifest.files.some(file => file.path.startsWith('/private/')));
+  assert.match(manifest.vault.url, /^\/private\/vault\.json\?v=[0-9a-f]{64}$/);
+  assert.equal(manifest.routes['/private/'].command, 'private');
+  assert.match(documents.get('/private/').html, /已上锁/);
   const expectedUpdates = new Map();
   for (const post of manifest.posts) {
     const source = sources.get(post.id);
@@ -108,6 +112,7 @@ test('shared manifest preserves the migration baseline and every currently publi
   }
   for (const [route, entry] of Object.entries(manifest.routes)) {
     assert.equal(typeof entry.title, 'string', route);
-    assert.match(entry.command, /^cat /, route);
+    if (route === '/private/') assert.equal(entry.command, 'private');
+    else assert.match(entry.command, /^cat /, route);
   }
 });

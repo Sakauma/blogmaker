@@ -9,11 +9,14 @@
 - `scripts/build.mjs` 编译终端，并为全部历史文章/索引/分页/别名生成独立 HTML 入口。每个入口有自己的标题、canonical、原文 HTML 回退和相同的终端程序。
 - `src/publish-snapshot/` 是历史路由、原文更新时间和静态资源的证据。`src/templates/home.html` 保存原首页内容，供静态回退使用。
 - `static/` 的文件按原路径覆盖复制到输出；Vite 使用 `terminal-assets/`，避免与历史 `assets/` 冲突。
+- `.private/files/` 与 `.private/password.txt` 是被 Git 忽略的本机私密内容和密码；只提交 `private/vault.enc.json` 密文。公开 manifest、JS、HTML、索引和资源中均不得放入私密明文或密码。
+- `/private/` 是通用上锁入口；密码通过独立 input 交给 Web Crypto，不经终端历史或网络请求。`lock`、pagehide 和取消解锁必须使迟到的异步结果失效，并清理私密缓存、DOM、分页与历史。
 
 ## 常用命令
 
 - `npm ci`：按 npm lock 安装依赖，需要 Node 22.12 或更新版本。
-- `npm run content`：只生成终端数据。
+- `npm run content`：只生成终端数据与密文副本。
+- `npm run vault -- init|seal|open|password|status`：初始化、加密本地编辑、恢复、轮换密码或查看状态；密码文件路径通过 `--password-file` / `--new-password-file` 指定，密码本身不放入参数。
 - `npm run build`：生成数据、检查 TypeScript、编译全部站点到 `dist/`。
 - `npm run dev`：在 `http://127.0.0.1:4173/` 静态预览 `dist/`，先运行 build。
 - `npm run dev:terminal`：生成数据后启动终端 Vite 开发服务。

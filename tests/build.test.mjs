@@ -4,9 +4,10 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { readPosts, parseSource, renderBody, routePath } from '../scripts/content.mjs';
 import { createTerminalContent, generateTerminalContent } from '../scripts/terminal-content.mjs';
+import { encryptVault } from '../scripts/vault-crypto.mjs';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const read = (r, p) => fs.readFile(path.join(r, 'dist', p), 'utf8');
 const hash = data => createHash('sha256').update(data).digest('hex');
@@ -41,11 +42,28 @@ test('build keeps every historic entry, original body and asset; content changes
         filter: source => !/(?:^|[\\/])(?:node_modules|test-results|playwright-report)(?:[\\/]|$)/.test(source),
       });
     }
+    const privateMarker = 'PRIVATE_BUILD_SENTINEL_177966fe9d';
+    const password = randomBytes(24).toString('base64url');
+    const envelope = await encryptVault({ version: 1, files: [{ path: '/private/hidden-name.txt', text: privateMarker }] }, password);
+    await fs.mkdir(path.join(sandbox, 'private'), { recursive: true });
+    const encrypted = JSON.stringify(envelope) + '\n';
+    await fs.writeFile(path.join(sandbox, 'private/vault.enc.json'), encrypted);
+    await fs.mkdir(path.join(sandbox, '.private/files'), { recursive: true });
+    await fs.writeFile(path.join(sandbox, '.private/password.txt'), password);
+    await fs.writeFile(path.join(sandbox, '.private/files/hidden-name.txt'), privateMarker);
     await fs.copyFile(path.join(root, '.nojekyll'), path.join(sandbox, '.nojekyll'));
     const sourceFiles = (await allFiles(path.join(sandbox, 'content'))).map(file => 'content/' + file);
     const sourceHashes = new Map(await Promise.all(sourceFiles.map(async file => [file, hash(await fs.readFile(path.join(sandbox, file)))])));
     const build = () => run(sandbox, 'scripts/build.mjs');
     build();
+    assert.equal(await read(sandbox, 'private/vault.json'), encrypted);
+    assert.match(await read(sandbox, 'private/index.html'), /name="robots" content="noindex"/);
+    assert.match(await read(sandbox, 'private/index.html'), /已上锁/);
+    for (const output of await allFiles(path.join(sandbox, 'dist'))) {
+      assert.ok(!output.startsWith('.private/'));
+      const bytes = await fs.readFile(path.join(sandbox, 'dist', output));
+      for (const secret of [privateMarker, password, 'hidden-name.txt']) assert.ok(!bytes.includes(Buffer.from(secret)), `private plaintext leaked into ${output}`);
+    }
     const original = await readPosts(sandbox);
     const originalCount = original.length;
     const manifest = JSON.parse(await fs.readFile(path.join(sandbox, 'terminal/src/generated/content.json'), 'utf8'));
@@ -129,5 +147,9 @@ test('build keeps every historic entry, original body and asset; content changes
         await assert.doesNotReject(fs.access(target), `${relative}: missing ${url}`);
       }
     }
+    await fs.mkdir(path.join(sandbox, 'static/private'), { recursive: true });
+    await fs.writeFile(path.join(sandbox, 'static/private/loose.txt'), privateMarker);
+    assert.throws(build, /Reserved private directory/, 'public-copy paths must never overwrite the encrypted namespace');
+    await assert.rejects(fs.access(path.join(sandbox, 'dist/private/loose.txt')));
   } finally { await fs.rm(sandbox, { recursive: true, force: true }); }
 });

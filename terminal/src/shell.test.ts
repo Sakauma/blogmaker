@@ -1,9 +1,23 @@
 import assert from 'node:assert/strict';
-import test from 'node:test';
-import { manifest, profile, files, posts, routes, projectFiles, routeFor, hrefForCommand, hrefForFile } from './content';
+import test, { afterEach, beforeEach } from 'node:test';
+import { clearPrivateFiles, isVaultUnlocked, manifest, profile, files, posts, routes, projectFiles, routeFor, hrefForCommand, hrefForFile, onFilesChanged, setPrivateFiles } from './content';
+import type { ContentFile, VaultFile } from './content';
 import { basename, directoryNames, fileLines, fileText, legacySourceFilenames, originalTextRuns, preformattedPoems, quote, sortedPostNames, sortedProjectNames, sourcePosts } from '../tests/content-fixtures';
-import { completeCommand, runCommand } from './shell';
+import { completeCommand, passwordCommandInput, runCommand } from './shell';
 import type { ShellResult, ShellState } from './shell';
+
+// Synthetic data only: no real vault, password or private source is read by these tests.
+const privateFixture: VaultFile[] = [
+  { path: '/private/README.md', text: '# Fixture owner notes\nPRIVATE_FIXTURE_ONLY\nA synthetic readme.\n' },
+  { path: '/private/assets.md', text: '# Fixture assets\nPRIVATE_FIXTURE_ONLY\n' },
+  { path: '/private/projects/blogmaker.md', text: '# Fixture blogmaker\nFirst line\nSecond line\nPRIVATE_FIXTURE_ONLY\nFinal line\n' },
+  { path: '/private/projects/homepage.md', text: '# Fixture homepage\nFirst line\nSecond line\nPRIVATE_FIXTURE_ONLY\nFinal line\n' },
+  { path: '/private/lab/README.txt', text: 'Fixture lab\nASCII experiments\nPRIVATE_FIXTURE_ONLY\n' },
+  { path: '/private/附件 空格.bin', text: 'Fixture binary summary\nPRIVATE_FIXTURE_ONLY\n', attachment: { mime: 'application/octet-stream', data: 'AAEC/w==' } },
+];
+const unlockFixture = () => setPrivateFiles(privateFixture);
+beforeEach(() => clearPrivateFiles());
+afterEach(() => clearPrivateFiles());
 
 const initial: ShellState = { cwd: '/', theme: 'dark', motion: true };
 const run = (input: string, state: ShellState = initial) => runCommand(input, state);
@@ -30,16 +44,16 @@ test('pwd reports the absolute website root', () => {
 });
 
 test('root listing contains the actual manifest files and directories', () => {
-  assert.deepEqual(texts(run('ls')), directoryNames('/'));
-  for (const entry of ['README.md', 'about.txt', 'contact.txt', 'assets.md', 'archives/', 'categories/', 'lab/', 'posts/', 'projects/', 'tags/']) {
+  assert.deepEqual(texts(run('ls')), [...new Set([...directoryNames('/'), 'private/'])].sort());
+  for (const entry of ['home.txt', 'about.txt', 'contact.txt', 'archives/', 'categories/', 'posts/', 'private/', 'tags/']) {
     assert.ok(texts(run('ls')).includes(entry), `missing root entry: ${entry}`);
   }
 });
 
 test('listing lines contain usable cd/cat commands and directory tones', () => {
   const result = run('ls');
-  assert.deepEqual(result.lines.find((line) => line.text === 'projects/'), {
-    text: 'projects/', tone: 'directory', command: 'cd /projects',
+  assert.deepEqual(result.lines.find((line) => line.text === 'private/'), {
+    text: 'private/', tone: 'directory', command: 'private',
   });
   assert.deepEqual(result.lines.find((line) => line.text === 'about.txt'), {
     text: 'about.txt', tone: 'plain', command: 'cat /about.txt',
@@ -56,19 +70,21 @@ test('ls -al includes dot entries and read-only permissions', () => {
 });
 
 test('cd supports relative paths, parent segments, duplicate slashes and dot segments', () => {
-  const state = run('cd projects').state;
-  assert.equal(state.cwd, '/projects');
-  const next = run('cd ../posts//./', state);
+  unlockFixture();
+  const state = run('cd private/projects').state;
+  assert.equal(state.cwd, '/private/projects');
+  const next = run('cd ../../posts//./', state);
   assert.equal(next.state.cwd, '/posts');
   assert.deepEqual(texts(run('pwd', next.state)), ['/posts']);
   assert.equal(run('cd ../../../../', next.state).state.cwd, '/');
 });
 
 test('tilde and slash always resolve to the website root', () => {
-  const state = { ...initial, cwd: '/projects' };
+  unlockFixture();
+  const state = { ...initial, cwd: '/tags' };
   for (const command of ['cd ~', 'cd /', 'cd']) assert.equal(run(command, state).state.cwd, '/');
   assert.equal(run('cd ~/posts', state).state.cwd, '/posts');
-  assert.deepEqual(texts(run('ls ~/lab', state)), directoryNames('/lab'));
+  assert.deepEqual(texts(run('ls ~/private/lab', state)), directoryNames('/private/lab'));
 });
 
 test('invalid cd paths and files leave state unchanged', () => {
@@ -77,10 +93,11 @@ test('invalid cd paths and files leave state unchanged', () => {
   expectError('cd / notes', /usage/);
 });
 
-test('relative cat reads both real project files including every final line', () => {
+test('relative cat reads both unlocked synthetic projects including every final line', () => {
+  unlockFixture();
   assert.deepEqual(sortedProjectNames(), ['blogmaker.md', 'homepage.md']);
   for (const project of projectFiles) {
-    const result = run(`cat ${quote(basename(project.path))}`, { ...initial, cwd: '/projects' });
+    const result = run(`cat ${quote(basename(project.path))}`, { ...initial, cwd: '/private/projects' });
     assert.deepEqual(texts(result), fileLines(project.path));
     assert.ok(result.lines.length > 3, 'the article must not collapse to its summary');
   }
@@ -139,13 +156,15 @@ test('published Unicode, encoded and index.html URL forms resolve to the same co
 });
 
 test('successful single-file cat and open return the canonical VFS file across relative and quoted paths', () => {
+  unlockFixture();
   const post = posts[0];
   const cases: Array<[string, ShellState]> = [
     [`cat ${quote(basename(post.file))}`, { ...initial, cwd: '/posts' }],
-    [`cat ${quote(`..${post.file}`)}`, { ...initial, cwd: '/projects' }],
+    [`cat ${quote(`..${post.file}`)}`, { ...initial, cwd: '/tags' }],
     [`cat ${quote(`~${post.file}`)}`, { ...initial, cwd: '/tags' }],
     [`cat -- "${post.file.replace('/posts/', '/posts/../posts/')}"`, initial],
-    [`open ${quote(post.id)}`, { ...initial, cwd: '/projects' }],
+    [`open ${quote(post.id)}`, { ...initial, cwd: '/tags' }],
+    [`open ${quote(post.id)}`, { ...initial, cwd: '/private/projects' }],
     [`open ${quote(post.path)}`, initial],
   ];
   for (const [command, state] of cases) {
@@ -155,7 +174,7 @@ test('successful single-file cat and open return the canonical VFS file across r
     assert.equal(hrefForFile(result.file!), post.path);
   }
   assert.equal(run('about').file, '/about.txt');
-  assert.equal(run('open blogmaker').file, '/projects/blogmaker.md');
+  assert.equal(run('open blogmaker').file, '/private/projects/blogmaker.md');
 });
 
 test('filters, multi-file reads and stdin cat do not label ordinary output as a whole file', () => {
@@ -195,14 +214,16 @@ test('about and contact expose the original author and actual profile values', (
 });
 
 test('cat accepts multiple files in input order', () => {
-  assert.deepEqual(texts(run('cat contact.txt lab/README.txt')), [
-    ...fileLines('/contact.txt'), ...fileLines('/lab/README.txt'),
+  unlockFixture();
+  assert.deepEqual(texts(run('cat contact.txt private/lab/README.txt')), [
+    ...fileLines('/contact.txt'), ...fileLines('/private/lab/README.txt'),
   ]);
 });
 
 test('failed multi-file cat emits only the error, without the earlier file', () => {
+  unlockFixture();
   expectError('cat contact.txt missing.txt', /no such file or directory/);
-  expectError('cat /projects', /is a directory/);
+  expectError('cat /private/projects', /is a directory/);
   expectError('cat /about.txt/', /not a directory/);
 });
 
@@ -218,7 +239,8 @@ test('tree renders every real post with navigation metadata', () => {
 });
 
 test('find reports simple absolute paths from a relative directory', () => {
-  assert.deepEqual(texts(run('find ../lab', { ...initial, cwd: '/posts' })), ['/lab', ...directoryNames('/lab').map((name) => `/lab/${name}`)]);
+  unlockFixture();
+  assert.deepEqual(texts(run('find ../private/lab', { ...initial, cwd: '/posts' })), ['/private/lab', ...directoryNames('/private/lab').map((name) => `/private/lab/${name}`)]);
   assert.deepEqual(texts(run('find /contact.txt')), ['/contact.txt']);
 });
 
@@ -232,7 +254,8 @@ test('multi-stage listing pipelines filter filenames and count the output', () =
 });
 
 test('cat pipelines preserve full text then take the requested lines', () => {
-  assert.deepEqual(texts(run('cat projects/blogmaker.md | head -n 3')), fileLines('/projects/blogmaker.md').slice(0, 3));
+  unlockFixture();
+  assert.deepEqual(texts(run('cat private/projects/blogmaker.md | head -n 3')), fileLines('/private/projects/blogmaker.md').slice(0, 3));
   assert.deepEqual(texts(run('cat contact.txt | cat | wc -l')), [String(fileLines('/contact.txt').length)]);
 });
 
@@ -289,15 +312,17 @@ test('grep -F is literal, optionally case-insensitive, and has a consistent empt
 });
 
 test('grep can read a file and rejects missing patterns and sources', () => {
-  assert.deepEqual(texts(run('grep ASCII /lab/README.txt')), fileLines('/lab/README.txt').filter((line) => line.includes('ASCII')));
+  unlockFixture();
+  assert.deepEqual(texts(run('grep ASCII /private/lab/README.txt')), fileLines('/private/lab/README.txt').filter((line) => line.includes('ASCII')));
   expectError('grep', /usage/);
   expectError('grep words', /expected a file or piped input/);
   expectError('grep -z words about.txt', /unknown option/);
 });
 
 test('head defaults to ten lines and accepts bounded nonnegative counts', () => {
-  assert.deepEqual(texts(run('head /lab/README.txt')), fileLines('/lab/README.txt').slice(0, 10));
-  assert.deepEqual(texts(run('head -n 1 lab/README.txt')), fileLines('/lab/README.txt').slice(0, 1));
+  unlockFixture();
+  assert.deepEqual(texts(run('head /private/lab/README.txt')), fileLines('/private/lab/README.txt').slice(0, 10));
+  assert.deepEqual(texts(run('head -n 1 private/lab/README.txt')), fileLines('/private/lab/README.txt').slice(0, 1));
   assert.deepEqual(texts(run('echo a | head -n 0')), []);
   assert.deepEqual(texts(run('echo a | head -n 1000')), ['a']);
   for (const count of ['-1', '1.5', 'NaN', 'Infinity', '1001', '999999999999999999999']) {
@@ -344,9 +369,9 @@ test('theme changes return a new state and no UI effect', () => {
 });
 
 test('motion updates preserve cwd and theme, without mutating the input', () => {
-  const state: ShellState = { cwd: '/lab', theme: 'amber', motion: true };
+  const state: ShellState = { cwd: '/tags', theme: 'amber', motion: true };
   const result = run('motion off', state);
-  assert.deepEqual(result.state, { cwd: '/lab', theme: 'amber', motion: false });
+  assert.deepEqual(result.state, { cwd: '/tags', theme: 'amber', motion: false });
   assert.deepEqual(texts(result), ['motion: off']);
   assert.equal(result.effect, undefined);
   assert.equal(state.motion, true);
@@ -372,6 +397,7 @@ test('screen commands expose the exact effect contract', () => {
 });
 
 test('identity, ISO date, coffee aliases and content shortcuts are available', () => {
+  unlockFixture();
   assert.deepEqual(texts(run('whoami')), ['visitor']);
   assert.match(texts(run('date'))[0], /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
   assert.deepEqual(texts(run('coffee')), ['[coffee] A fresh cup. Take a breath.']);
@@ -390,7 +416,7 @@ test('identity, ISO date, coffee aliases and content shortcuts are available', (
     assert.deepEqual(texts(run(command)), directoryNames(`/${command}`));
   }
   assert.deepEqual(texts(run('about')), fileLines('/about.txt'));
-  assert.deepEqual(texts(run('open blogmaker')), fileLines('/projects/blogmaker.md'));
+  assert.deepEqual(texts(run('open blogmaker')), fileLines('/private/projects/blogmaker.md'));
   for (const post of posts) assert.deepEqual(texts(run(`open ${quote(post.id)}`)), fileLines(post.file));
   expectError('sudo rm -rf /', /available command/);
 });
@@ -409,32 +435,36 @@ test('completion expands a unique command and preserves leading spaces', () => {
   assert.equal(completeCommand('help', initial).value, 'help ');
 });
 
-test('file completion matches a real project and trailing space', () => {
-  assert.deepEqual(completeCommand('cat projects/bl', initial), {
-    value: 'cat projects/blogmaker.md ', candidates: ['projects/blogmaker.md'],
+test('file completion matches an unlocked fixture project and trailing space', () => {
+  unlockFixture();
+  assert.deepEqual(completeCommand('cat private/projects/bl', initial), {
+    value: 'cat private/projects/blogmaker.md ', candidates: ['private/projects/blogmaker.md'],
   });
 });
 
 test('directory completion appends slash, while cd excludes regular files', () => {
-  assert.deepEqual(completeCommand('cd pro', initial), { value: 'cd projects/', candidates: ['projects/'] });
+  unlockFixture();
+  assert.deepEqual(completeCommand('cd private/pro', initial), { value: 'cd private/projects/', candidates: ['private/projects/'] });
   assert.deepEqual(completeCommand('cd about', initial), { value: 'cd about', candidates: [] });
-  assert.deepEqual(completeCommand('cat lab/', initial), { value: 'cat lab/README.txt ', candidates: ['lab/README.txt'] });
+  assert.deepEqual(completeCommand('cat private/lab/', initial), { value: 'cat private/lab/README.txt ', candidates: ['private/lab/README.txt'] });
 });
 
 test('completion resolves the current cwd and parent-relative paths', () => {
+  unlockFixture();
   const state = { ...initial, cwd: '/posts' };
   const name = sortedPostNames()[0];
   assert.equal(completeCommand(`cat ${name.slice(0, -3)}`, state).value, `cat ${name} `);
-  assert.equal(completeCommand('cat ../projects/bl', state).value, 'cat ../projects/blogmaker.md ');
-  assert.equal(completeCommand('cd ../pro', state).value, 'cd ../projects/');
+  assert.equal(completeCommand('cat ../private/projects/bl', state).value, 'cat ../private/projects/blogmaker.md ');
+  assert.equal(completeCommand('cd ../private/pro', state).value, 'cd ../private/projects/');
   assert.equal(completeCommand('cat ~/contact', state).value, 'cat ~/contact.txt ');
 });
 
 test('completion preserves quotes and whitespace around the token', () => {
-  assert.equal(completeCommand('cat  "projects/bl', initial).value, 'cat  "projects/blogmaker.md" ');
-  assert.equal(completeCommand("cat 'projects/bl", initial).value, "cat 'projects/blogmaker.md' ");
-  assert.equal(completeCommand('cat "projects/bl"', initial).value, 'cat "projects/blogmaker.md" ');
-  assert.equal(completeCommand('cat "pro', initial).value, 'cat "projects/');
+  unlockFixture();
+  assert.equal(completeCommand('cat  "private/projects/bl', initial).value, 'cat  "private/projects/blogmaker.md" ');
+  assert.equal(completeCommand("cat 'private/projects/bl", initial).value, "cat 'private/projects/blogmaker.md' ");
+  assert.equal(completeCommand('cat "private/projects/bl"', initial).value, 'cat "private/projects/blogmaker.md" ');
+  assert.equal(completeCommand('cat "private/pro', initial).value, 'cat "private/projects/');
 });
 
 test('completion expands parameter values and flags', () => {
@@ -456,8 +486,9 @@ test('completion works after a pipe without touching preceding tokens', () => {
 });
 
 test('ambiguous completion exposes candidates and preserves input until a common prefix exists', () => {
-  const result = completeCommand('cat projects/', initial);
-  assert.deepEqual(result, { value: 'cat projects/', candidates: sortedProjectNames().map((name) => `projects/${name}`) });
+  unlockFixture();
+  const result = completeCommand('cat private/projects/', initial);
+  assert.deepEqual(result, { value: 'cat private/projects/', candidates: sortedProjectNames().map((name) => `private/projects/${name}`) });
   assert.equal(completeCommand('cd ~', initial).value, 'cd ~/');
   assert.equal(completeCommand('cd ..', initial).value, 'cd ../');
   assert.deepEqual(completeCommand('cat missing/', initial), { value: 'cat missing/', candidates: [] });
@@ -524,13 +555,14 @@ test('head and tail handle zero, empty stdin and a single empty line', () => {
 });
 
 test('head and tail apply their count separately to multiple files with standard headers', () => {
+  unlockFixture();
   for (const command of ['head', 'tail']) {
     const select = (path: string) => command === 'head' ? fileLines(path).slice(0, 2) : fileLines(path).slice(-2);
-    assert.deepEqual(texts(run(`${command} -2 contact.txt lab/README.txt`)), [
-      '==> contact.txt <==', ...select('/contact.txt'), '', '==> lab/README.txt <==', ...select('/lab/README.txt'),
+    assert.deepEqual(texts(run(`${command} -2 contact.txt private/lab/README.txt`)), [
+      '==> contact.txt <==', ...select('/contact.txt'), '', '==> private/lab/README.txt <==', ...select('/private/lab/README.txt'),
     ]);
-    assert.deepEqual(texts(run(`${command} -0 contact.txt lab/README.txt`)), [
-      '==> contact.txt <==', '', '==> lab/README.txt <==',
+    assert.deepEqual(texts(run(`${command} -0 contact.txt private/lab/README.txt`)), [
+      '==> contact.txt <==', '', '==> private/lab/README.txt <==',
     ]);
     expectError(`${command} contact.txt missing.txt`, /no such file or directory/);
     assert.equal(run(`${command} -1 -- contact.txt`).file, undefined);
@@ -550,12 +582,13 @@ test('grep defaults to JavaScript regular expressions with anchors, alternatives
 });
 
 test('grep labels multiple file matches and preserves each source line markup', () => {
-  const expected = ['contact.txt', 'lab/README.txt'].flatMap(path => fileLines(`/${path}`)
-    .filter(line => line.length > 0).map(text => ({ text: `${path}:${text}`, markup: true })));
-  assert.deepEqual(run("grep '.+' contact.txt lab/README.txt").lines, expected);
+  unlockFixture();
+  const expected = ['contact.txt', 'private/lab/README.txt'].flatMap(path => fileLines(`/${path}`)
+    .filter(line => line.length > 0).map(text => ({ text: `${path}:${text}`, markup: true, ...(path.startsWith('private/') ? { sourceFile: '/' + path } : {}) })));
+  assert.deepEqual(run("grep '.+' contact.txt private/lab/README.txt").lines, expected);
   assert.deepEqual(run("grep '^' contact.txt").lines, run('cat contact.txt').lines);
-  assert.deepEqual(texts(run("grep '.+' contact.txt lab/README.txt | wc -l")), [String(expected.length)]);
-  assert.equal(run("grep '.' contact.txt lab/README.txt").file, undefined);
+  assert.deepEqual(texts(run("grep '.+' contact.txt private/lab/README.txt | wc -l")), [String(expected.length)]);
+  assert.equal(run("grep '.' contact.txt private/lab/README.txt").file, undefined);
   expectError("grep '.' contact.txt missing.txt", /no such file or directory/);
   expectError("grep '.' /posts", /is a directory/);
   expectError("grep '.' contact.txt/", /not a directory/);
@@ -564,49 +597,52 @@ test('grep labels multiple file matches and preserves each source line markup', 
 });
 
 test('invalid grep regular expressions are explicit atomic errors in files and pipelines', () => {
-  const state: ShellState = { cwd: '/projects', theme: 'amber', motion: false };
+  const state: ShellState = { cwd: '/tags', theme: 'amber', motion: false };
   for (const pattern of ['[', '(', '*', '[z-a]']) {
     expectError(`grep ${quote(pattern)} /contact.txt`, /grep: invalid regular expression/, state);
     expectError(`cat /contact.txt | grep ${quote(pattern)} | less`, /grep: invalid regular expression/, state);
     expectError(`theme light | grep ${quote(pattern)}`, /grep: invalid regular expression/, state);
   }
-  assert.deepEqual(state, { cwd: '/projects', theme: 'amber', motion: false });
+  assert.deepEqual(state, { cwd: '/tags', theme: 'amber', motion: false });
 });
 
 test('find combines basename globs and file types across roots in input order', () => {
-  const expected = ['/projects', '/lab'].flatMap(root => files.filter(file => file.path.startsWith(`${root}/`))
+  unlockFixture();
+  const expected = ['/private/projects', '/private/lab'].flatMap(root => files.filter(file => file.path.startsWith(`${root}/`))
     .map(file => file.path).sort());
-  assert.deepEqual(texts(run('find /projects /lab -type f')), expected);
-  assert.deepEqual(texts(run("find /projects /lab -name '*.md' -type f")), expected.filter(path => path.endsWith('.md')));
-  assert.deepEqual(texts(run('find /projects /lab -type d')), ['/projects', '/lab']);
-  assert.deepEqual(texts(run("find -name '*.md' -type f", { ...initial, cwd: '/projects' })), expected.filter(path => path.startsWith('/projects/')));
+  assert.deepEqual(texts(run('find /private/projects /private/lab -type f')), expected);
+  assert.deepEqual(texts(run("find /private/projects /private/lab -name '*.md' -type f")), expected.filter(path => path.endsWith('.md')));
+  assert.deepEqual(texts(run('find /private/projects /private/lab -type d')), ['/private/projects', '/private/lab']);
+  assert.deepEqual(texts(run("find -name '*.md' -type f", { ...initial, cwd: '/private/projects' })), expected.filter(path => path.startsWith('/private/projects/')));
   assert.deepEqual(texts(run("find /contact.txt -type f -name 'contact.*'")), ['/contact.txt']);
   assert.deepEqual(texts(run('find /contact.txt -type d')), []);
   assert.deepEqual(texts(run("find / -type d -name /")), ['/']);
-  assert.deepEqual(texts(run("find -- ../lab -name 'README.*'", { ...initial, cwd: '/projects' })), ['/lab/README.txt']);
+  assert.deepEqual(texts(run("find -- ../private/lab -name 'README.*'", { ...initial, cwd: '/tags' })), ['/private/lab/README.txt']);
 });
 
 test('find globs support question marks and bracket classes while keeping regex punctuation literal', () => {
+  unlockFixture();
   for (const pattern of ['??????.txt', '[R]EADME.t?t', '[!a-z]*.txt', '[A-Z]*.txt']) {
-    assert.deepEqual(texts(run(`find /lab -name ${quote(pattern)} -type f`)), ['/lab/README.txt']);
+    assert.deepEqual(texts(run(`find /private/lab -name ${quote(pattern)} -type f`)), ['/private/lab/README.txt']);
   }
   for (const pattern of ['README+txt', 'README(txt)', '*.txt[', '[]]*', '[[]*']) {
-    assert.deepEqual(texts(run(`find /lab -name ${quote(pattern)}`)), [], pattern);
+    assert.deepEqual(texts(run(`find /private/lab -name ${quote(pattern)}`)), [], pattern);
   }
-  assert.deepEqual(texts(run("find /lab -type f -name '*.txt' -name 'R*'")), ['/lab/README.txt']);
-  assert.deepEqual(texts(run('find /lab -type f -type d')), []);
+  assert.deepEqual(texts(run("find /private/lab -type f -name '*.txt' -name 'R*'")), ['/private/lab/README.txt']);
+  assert.deepEqual(texts(run('find /private/lab -type f -type d')), []);
 });
 
 test('find validates every path and expression before producing navigable entries', () => {
-  expectError('find /lab /missing', /no such file or directory/);
+  unlockFixture();
+  expectError('find /private/lab /missing', /no such file or directory/);
   expectError('find /contact.txt/', /not a directory/);
   expectError('find / -unknown', /unknown option/);
   expectError('find / -name', /expects a glob pattern/);
   expectError('find / -type', /expects f or d/);
   expectError('find / -type x', /expects f or d/);
-  expectError('find / -type f /projects', /paths must precede filters/);
+  expectError('find / -type f /private/projects', /paths must precede filters/);
   expectError("find / -name '[z-a]'", /invalid glob/);
-  const result = run('find /projects -type f');
+  const result = run('find /private/projects -type f');
   assert.ok(result.lines.length > 0);
   for (const line of result.lines) {
     assert.equal(line.tone, 'plain');
@@ -632,7 +668,8 @@ test('wc selects and combines flags in canonical line word byte order', () => {
 });
 
 test('wc counts original UTF-8 file bytes and produces multi-file totals', () => {
-  const paths = ['contact.txt', 'lab/README.txt'];
+  unlockFixture();
+  const paths = ['contact.txt', 'private/lab/README.txt'];
   const counts = paths.map(path => [fileLines(`/${path}`).length, fileText(`/${path}`).match(/\S+/g)?.length ?? 0, Buffer.byteLength(fileText(`/${path}`), 'utf8')]);
   const total = counts.reduce((sum, count) => sum.map((value, index) => value + count[index]), [0, 0, 0]);
   assert.deepEqual(texts(run(`wc ${paths.join(' ')}`)), [
@@ -644,12 +681,12 @@ test('wc counts original UTF-8 file bytes and produces multi-file totals', () =>
   assert.deepEqual(texts(run('wc -c -- contact.txt')), [`${counts[0][2]} contact.txt`]);
   for (const file of files) assert.deepEqual(texts(run(`wc -c ${quote(file.path)}`)), [`${Buffer.byteLength(file.text, 'utf8')} ${file.path}`]);
   expectError('wc contact.txt /missing', /no such file or directory/);
-  expectError('wc -l /projects', /is a directory/);
+  expectError('wc -l /private/projects', /is a directory/);
   expectError('wc -c contact.txt/', /not a directory/);
 });
 
 test('home and exit reset cwd with one home effect and preserve preferences', () => {
-  const state: ShellState = { cwd: '/projects', theme: 'amber', motion: false };
+  const state: ShellState = { cwd: '/tags', theme: 'amber', motion: false };
   for (const command of ['home', 'exit']) {
     const result = run(command, state);
     assert.deepEqual(result, { lines: [], state: { ...state, cwd: '/' }, effect: { type: 'home' } });
@@ -658,14 +695,14 @@ test('home and exit reset cwd with one home effect and preserve preferences', ()
     expectError(`${command} | pwd`, /only text-producing commands/, state);
     expectError(`echo content | ${command}`, /only text-producing commands/, state);
   }
-  assert.deepEqual(state, { cwd: '/projects', theme: 'amber', motion: false });
+  assert.deepEqual(state, { cwd: '/tags', theme: 'amber', motion: false });
 });
 
 test('more and less return full file lines with canonical labels and navigation paths', () => {
   const post = posts.reduce((longest, post) => fileText(post.file).length > fileText(longest.file).length ? post : longest);
   const expected = run(`cat ${quote(post.file)}`).lines;
   assert.ok(expected.length > 20, 'the pager receives an article longer than one page');
-  const state: ShellState = { cwd: '/projects', theme: 'light', motion: false };
+  const state: ShellState = { cwd: '/tags', theme: 'light', motion: false };
   for (const mode of ['more', 'less']) {
     const result = run(`${mode} ${quote(`../posts/../${post.file.slice(1)}`)}`, state);
     assert.deepEqual(result, { lines: expected, state, effect: { type: 'pager', mode, label: post.file }, file: post.file });
@@ -680,11 +717,12 @@ test('more and less return full file lines with canonical labels and navigation 
 });
 
 test('a final pager receives all pipe lines including blank lines, markup and navigation commands', () => {
+  unlockFixture();
   for (const mode of ['more', 'less']) {
     for (const prefix of [
-      'cat /contact.txt', 'cat /contact.txt /lab/README.txt',
-      'ls /projects | grep -F .md | head -2 | tail -1',
-      "find /projects -type f -name '*.md'", 'posts', 'echo value | grep absent', "echo ''",
+      'cat /contact.txt', 'cat /contact.txt /private/lab/README.txt',
+      'ls /private/projects | grep -F .md | head -2 | tail -1',
+      "find /private/projects -type f -name '*.md'", 'posts', 'echo value | grep absent', "echo ''",
     ]) {
       const expected = run(prefix).lines;
       const result = run(`${prefix} | ${mode}`);
@@ -696,6 +734,7 @@ test('a final pager receives all pipe lines including blank lines, markup and na
 });
 
 test('pipelines never publish a file navigation path even if their final stage reads one', () => {
+  unlockFixture();
   for (const final of ['cat /contact.txt', 'about', 'open blogmaker', 'more /contact.txt', 'less /contact.txt']) {
     const result = run(`echo ignored | ${final}`);
     assert.ok(!result.lines.some(line => line.tone === 'error'), final);
@@ -705,7 +744,7 @@ test('pipelines never publish a file navigation path even if their final stage r
 });
 
 test('pagers are allowed only as the last stage and all other display effects remain standalone', () => {
-  const state: ShellState = { cwd: '/projects', theme: 'light', motion: false };
+  const state: ShellState = { cwd: '/tags', theme: 'light', motion: false };
   for (const input of ['more /contact.txt | wc', 'cat /contact.txt | less | head', 'echo x | more | less']) {
     expectError(input, /more\/less must be the final command/, state);
   }
@@ -715,12 +754,13 @@ test('pagers are allowed only as the last stage and all other display effects re
 });
 
 test('whole-pipeline validation occurs before any earlier text command executes', t => {
+  unlockFixture();
   let calls = 0;
   t.mock.method(Date.prototype, 'toISOString', () => { calls++; return '2026-01-01T00:00:00.000Z'; });
   for (const [input, error] of [
     ['date | grep "[" | less', /invalid regular expression/],
     ['date | head /missing | more', /no such file or directory/],
-    ['date | find /lab /missing', /no such file or directory/],
+    ['date | find /private/lab /missing', /no such file or directory/],
     ['date | more | wc', /must be the final command/],
     ['date | home', /only text-producing commands/],
     ['date | less -x', /unknown option/],
@@ -732,9 +772,10 @@ test('whole-pipeline validation occurs before any earlier text command executes'
 });
 
 test('completion covers new commands, short counts, grep flags and find filter values', () => {
-  for (const [prefix, command] of [['tai', 'tail'], ['hom', 'home'], ['exi', 'exit'], ['mor', 'more'], ['les', 'less']]) {
+  for (const [prefix, command] of [['tai', 'tail'], ['exi', 'exit'], ['mor', 'more'], ['les', 'less']]) {
     assert.deepEqual(completeCommand(prefix, initial), { value: `${command} `, candidates: [command] });
   }
+  assert.deepEqual(completeCommand('hom', initial).candidates, ['home', 'home.txt']);
   for (const [input, value] of [
     ['head -2', 'head -20 '], ['tail -n 1', 'tail -n 10 '], ['tail -n +2', 'tail -n +20 '],
     ['tail +2', 'tail +20 '], ['grep -F', 'grep -F '], ['grep -iF', 'grep -iF '],
@@ -747,15 +788,16 @@ test('completion covers new commands, short counts, grep flags and find filter v
 });
 
 test('completion respects grep patterns, multi-file arguments, pager arity and pipeline tokens', () => {
+  unlockFixture();
   for (const command of ['head -2', 'tail -n 3', 'wc -lc', 'find', 'grep -iF text']) {
-    assert.equal(completeCommand(`${command} /contact.txt pro`, initial).value, `${command} /contact.txt projects/`);
+    assert.equal(completeCommand(`${command} /contact.txt private/pro`, initial).value, `${command} /contact.txt private/projects/`);
   }
   assert.deepEqual(completeCommand('grep -iF pro', initial), { value: 'grep -iF pro', candidates: [] });
   assert.deepEqual(completeCommand('grep -- pro', initial), { value: 'grep -- pro', candidates: [] });
-  assert.equal(completeCommand('grep -- -i pro', initial).value, 'grep -- -i projects/');
+  assert.equal(completeCommand('grep -- -i private/pro', initial).value, 'grep -- -i private/projects/');
   assert.deepEqual(completeCommand('grep text -i', initial).candidates, []);
   for (const command of ['more', 'less']) {
-    assert.equal(completeCommand(`${command} "projects/bl`, initial).value, `${command} "projects/blogmaker.md" `);
+    assert.equal(completeCommand(`${command} "private/projects/bl`, initial).value, `${command} "private/projects/blogmaker.md" `);
     assert.deepEqual(completeCommand(`${command} /contact.txt `, initial).candidates, []);
   }
   assert.equal(completeCommand('ls / | grep -F .md | les', initial).value, 'ls / | grep -F .md | less ');
@@ -766,20 +808,21 @@ test('completion respects grep patterns, multi-file arguments, pager arity and p
 
 test('help documents regex grep, UTF-8 bytes, filters, documents and the final-pager contract', () => {
   const help = texts(run('help')).join('\n');
-  for (const text of ['home · exit', 'more [file]', 'less [file]', '[-name GLOB]', '[-type f|d]', 'JS regex', '-F is literal', 'tail [-n N|-N|+N]', 'UTF-8 byte', './file.md · contact · readme', 'pager must finish a pipeline']) {
+  for (const text of ['home · exit', 'more [file]', 'less [file]', '[-name GLOB]', '[-type f|d]', 'JS regex', '-F is literal', 'tail [-n N|-N|+N]', 'UTF-8 byte', './file.md · contact', 'pager must finish a pipeline']) {
     assert.ok(help.includes(text), text);
   }
 });
 
 test('document paths execute with full text, a document effect and their canonical file', () => {
+  unlockFixture();
   const post = posts[0];
   const cases: Array<[string, string, ShellState]> = [
     ['contact.txt', '/contact.txt', initial],
-    ['./README.md', '/README.md', initial],
+    ['./private/README.md', '/private/README.md', initial],
     [post.file, post.file, initial],
     [basename(post.file), post.file, { cwd: '/posts', theme: 'amber', motion: false }],
-    [`../posts/./${basename(post.file)}`, post.file, { cwd: '/projects', theme: 'light', motion: true }],
-    [`~${post.file}`, post.file, { cwd: '/lab', theme: 'dark', motion: false }],
+    [`../posts/./${basename(post.file)}`, post.file, { cwd: '/tags', theme: 'light', motion: true }],
+    [`~${post.file}`, post.file, { cwd: '/tags', theme: 'dark', motion: false }],
   ];
   for (const [command, file, state] of cases) {
     const result = run(quote(command), state);
@@ -789,7 +832,8 @@ test('document paths execute with full text, a document effect and their canonic
 });
 
 test('contact and readme aliases open documents while built-in names take precedence over directories', () => {
-  for (const [command, file] of [['contact', '/contact.txt'], ['readme', '/README.md']]) {
+  unlockFixture();
+  for (const [command, file] of [['contact', '/contact.txt'], ['readme', '/private/README.md']]) {
     const state: ShellState = { cwd: '/posts', theme: 'amber', motion: false };
     assert.deepEqual(run(command, state), { lines: run(`cat ${file}`).lines, state, effect: { type: 'document' }, file });
     expectError(`${command} extra`, /usage/, state);
@@ -797,14 +841,15 @@ test('contact and readme aliases open documents while built-in names take preced
   assert.deepEqual(texts(run('projects')), sortedProjectNames());
   assert.equal(run('projects').effect, undefined);
   assert.equal(run('about').effect, undefined);
-  expectError('projects/', /is a directory/);
+  expectError('private/projects/', /is a directory/);
 });
 
 test('document validation rejects directories, nonexistent commands and extra arguments atomically', () => {
-  for (const directory of ['/', './', '/projects', '~/lab/']) expectError(directory, /is a directory/);
+  unlockFixture();
+  for (const directory of ['/', './', '/private/projects', '~/private/lab/']) expectError(directory, /is a directory/);
   expectError('contact.txt/', /not a directory/);
   expectError('contact.txt extra', /usage/);
-  expectError('README.md -n 1', /usage/);
+  expectError('/private/README.md -n 1', /usage/);
   expectError('missing.md', /command not found/);
   expectError('/missing.md', /command not found/);
   expectError('echo visible | /missing.md | less', /command not found/);
@@ -812,9 +857,10 @@ test('document validation rejects directories, nonexistent commands and extra ar
 });
 
 test('documents are pure text at every pipeline position and keep a final pager effect', () => {
+  unlockFixture();
   const original = run('cat /contact.txt').lines;
   for (const command of ['contact.txt', '/contact.txt', '~/contact.txt', 'contact', 'readme']) {
-    const expected = command === 'readme' ? run('cat /README.md').lines : original;
+    const expected = command === 'readme' ? run('cat /private/README.md').lines : original;
     assert.deepEqual(run(`${command} | cat`), { lines: expected, state: initial });
     assert.deepEqual(run(`echo ignored | ${command}`), { lines: expected, state: initial });
     assert.deepEqual(run(`echo ignored | ${command} | head -2`), { lines: expected.slice(0, 2), state: initial });
@@ -824,20 +870,369 @@ test('documents are pure text at every pipeline position and keep a final pager 
 });
 
 test('first-token completion includes executable documents and directories in the current cwd', () => {
-  assert.deepEqual(completeCommand('README', initial), { value: 'README.md ', candidates: ['README.md'] });
+  unlockFixture();
+  assert.deepEqual(completeCommand('README', { ...initial, cwd: '/private' }), { value: 'README.md ', candidates: ['README.md'] });
   assert.equal(completeCommand('./contact', initial).value, './contact.txt ');
-  assert.equal(completeCommand('~/projects/bl', initial).value, '~/projects/blogmaker.md ');
-  assert.equal(completeCommand('"/projects/bl', initial).value, '"/projects/blogmaker.md" ');
-  assert.equal(completeCommand('   /projects/bl', initial).value, '   /projects/blogmaker.md ');
+  assert.equal(completeCommand('~/private/projects/bl', initial).value, '~/private/projects/blogmaker.md ');
+  assert.equal(completeCommand('"/private/projects/bl', initial).value, '"/private/projects/blogmaker.md" ');
+  assert.equal(completeCommand('   /private/projects/bl', initial).value, '   /private/projects/blogmaker.md ');
   assert.equal(completeCommand('echo text | ./contact', initial).value, 'echo text | ./contact.txt ');
-  assert.deepEqual(completeCommand('/pro', initial), { value: '/projects/', candidates: ['/projects/'] });
+  assert.deepEqual(completeCommand('/private/pro', initial), { value: '/private/projects/', candidates: ['/private/projects/'] });
   assert.deepEqual(completeCommand('contact', initial).candidates, ['contact', 'contact.txt']);
-  assert.deepEqual(completeCommand('pro', initial).candidates, ['projects', 'projects/']);
+  assert.deepEqual(completeCommand('pro', { ...initial, cwd: '/private' }).candidates, ['projects', 'projects/']);
   assert.deepEqual(completeCommand('readm', initial), { value: 'readme ', candidates: ['readme'] });
   const post = posts[0];
   const name = basename(post.file);
   const state: ShellState = { cwd: '/posts', theme: 'light', motion: false };
   assert.equal(completeCommand(name.slice(0, -3), state).value, `${name} `);
-  assert.equal(completeCommand('../projects/bl', state).value, '../projects/blogmaker.md ');
+  assert.equal(completeCommand('../private/projects/bl', state).value, '../private/projects/blogmaker.md ');
   assert.deepEqual(completeCommand('README.md ', initial).candidates, []);
+});
+
+test('the public manifest contains the homepage and private route without owner documents', () => {
+  assert.ok(manifest.files.some(file => file.path === '/home.txt'));
+  assert.ok(manifest.files.every(file => !file.path.startsWith('/private/') && !file.attachment));
+  for (const path of ['/README.md', '/assets.md', '/lab/README.txt', '/projects/blogmaker.md', '/projects/homepage.md']) {
+    assert.ok(!manifest.files.some(file => file.path === path), `owner document is absent from public manifest: ${path}`);
+  }
+  assert.deepEqual(routes['/private/'], { title: '私密资料', command: 'private' });
+  assert.equal(routeFor('/private/index.html'), routes['/private/']);
+  assert.deepEqual(run('open /private/index.html').effect, { type: 'unlock', command: 'open /private/index.html' });
+  unlockFixture();
+  assert.deepEqual(run('open /private/index.html').lines, run('private').lines);
+  if (manifest.vault) assert.match(manifest.vault.url, /^\/private\/vault\.json\?v=[\w-]+$/);
+});
+
+test('private files use live bindings while public profile, posts and routes stay fixed', () => {
+  const publicFiles = files;
+  const publicProfile = profile;
+  const publicPosts = posts;
+  const publicRoutes = routes;
+  assert.equal(isVaultUnlocked(), false);
+  assert.equal(files, manifest.files);
+  assert.deepEqual(projectFiles, []);
+  unlockFixture();
+  assert.equal(isVaultUnlocked(), true);
+  assert.notEqual(files, publicFiles);
+  assert.deepEqual(files.slice(publicFiles.length), privateFixture);
+  assert.deepEqual(projectFiles, privateFixture.filter(file => file.path.startsWith('/private/projects/')));
+  assert.equal(manifest.files, publicFiles);
+  assert.equal(profile, publicProfile);
+  assert.equal(posts, publicPosts);
+  assert.equal(routes, publicRoutes);
+  clearPrivateFiles();
+  assert.equal(isVaultUnlocked(), false);
+  assert.equal(files, publicFiles);
+  assert.deepEqual(projectFiles, []);
+});
+
+test('an empty private payload is unlocked and replaces a previous payload completely', () => {
+  unlockFixture();
+  assert.ok(texts(run('tree /')).some(text => text.includes('blogmaker.md')));
+  setPrivateFiles([]);
+  assert.equal(isVaultUnlocked(), true);
+  assert.deepEqual(projectFiles, []);
+  assert.equal(files.length, manifest.files.length);
+  assert.deepEqual(run('private'), { lines: [], state: initial });
+  assert.deepEqual(texts(run('tree /private')), ['private']);
+  assert.deepEqual(texts(run('find /private')), ['/private']);
+  expectError('cat /private/README.md', /no such file or directory/);
+  assert.deepEqual(completeCommand('cat /private/', initial).candidates, []);
+});
+
+test('private path validation is atomic for duplicates, traversal and file-directory conflicts', () => {
+  unlockFixture();
+  const previousFiles = files;
+  const previousProjects = projectFiles;
+  const invalidPaths = [
+    '/outside.txt', 'private/file.txt', '/private', '/private/', '/private//file.txt', '//private/file.txt',
+    '/private/./file.txt', '/private/../contact.txt', '/private/sub/../file.txt', '/private/file.txt/',
+    '/private\\file.txt', '/private/sub\\file.txt', '/private/file\0.txt', '/private-other/file.txt',
+  ];
+  const invalidPayloads: VaultFile[][] = invalidPaths.map(path => [{ path, text: 'invalid' }]);
+  invalidPayloads.push(
+    [{ path: '/private/same', text: 'a' }, { path: '/private/same', text: 'b' }],
+    [{ path: '/private/dir', text: 'a' }, { path: '/private/dir/file.txt', text: 'b' }],
+    [{ path: '/private/dir/file.txt', text: 'b' }, { path: '/private/dir', text: 'a' }],
+  );
+  for (const payload of invalidPayloads) {
+    assert.throws(() => setPrivateFiles([{ path: '/private/valid.txt', text: 'first' }, ...payload]), /vault:/);
+    assert.equal(files, previousFiles);
+    assert.equal(projectFiles, previousProjects);
+    assert.equal(isVaultUnlocked(), true);
+    assert.deepEqual(texts(run('readme')), fileLines('/private/README.md'));
+  }
+  clearPrivateFiles();
+  assert.throws(() => setPrivateFiles(invalidPayloads[0]), /vault:/);
+  assert.equal(isVaultUnlocked(), false);
+});
+
+test('payload validation checks text and attachment types before any files become visible', () => {
+  const invalid = [
+    null, {}, [null], Array(1), [{ path: '/private/a', text: 3 }], [{ path: 3, text: 'x' }],
+    [{ path: '/private/a', text: 'x', attachment: null }],
+    [{ path: '/private/a', text: 'x', attachment: { mime: '', data: '' } }],
+    [{ path: '/private/a', text: 'x', attachment: { mime: 'text/plain\nheader', data: '' } }],
+    [{ path: '/private/a', text: 'x', attachment: { mime: 'text/plain', data: 'not base64' } }],
+    ...['A', 'AA', 'AAA', '=AAA', 'A===', '====', 'AB==', 'AAB=', 'AA==\n', 'AAA\n', 'AAA\r', 'AAA\u2028', 'AAA\u2029'].map(data => [
+      { path: '/private/a', text: 'x', attachment: { mime: 'text/plain', data } },
+    ]),
+    [{ path: '/private/a', text: 'x', attachment: { mime: 'text/plain', data: 42 } }],
+  ];
+  for (const value of invalid) {
+    assert.throws(() => setPrivateFiles(value as unknown as VaultFile[]), /vault:/);
+    assert.equal(files, manifest.files);
+    assert.equal(isVaultUnlocked(), false);
+  }
+  const text = 'UTF-8 文本 😀 é\n';
+  setPrivateFiles([{ path: '/private/文本.txt', text }]);
+  assert.deepEqual(texts(run('cat /private/文本.txt')), [text.trimEnd()]);
+  assert.deepEqual(texts(run('wc -c /private/文本.txt')), [`${Buffer.byteLength(text, 'utf8')} /private/文本.txt`]);
+});
+
+test('large and zero-byte attachments validate without regex stack growth or decoded copies', () => {
+  const data = Buffer.alloc(2 * 1024 * 1024, 0x5a).toString('base64');
+  setPrivateFiles([
+    { path: '/private/large.pdf', text: 'Synthetic large attachment summary', attachment: { mime: 'application/pdf', data } },
+    { path: '/private/empty.bin', text: 'Zero-byte fixture', attachment: { mime: 'application/octet-stream', data: '' } },
+  ]);
+  assert.equal(files.find(file => file.path === '/private/large.pdf')?.attachment?.data, data);
+  assert.equal(files.find(file => file.path === '/private/empty.bin')?.attachment?.data, '');
+  assert.deepEqual(texts(run('cat /private/large.pdf')), ['Synthetic large attachment summary']);
+  assert.deepEqual(run('download /private/large.pdf').effect, { type: 'download', file: '/private/large.pdf' });
+  assert.deepEqual(run('download /private/empty.bin').effect, { type: 'download', file: '/private/empty.bin' });
+  clearPrivateFiles();
+  assert.equal(files, manifest.files);
+  assert.deepEqual(completeCommand('cat /private/', initial).candidates, []);
+});
+
+test('private payloads are copied so caller mutation cannot change validated paths or attachments', () => {
+  const payload: ContentFile[] = [{ path: '/private/copy.bin', text: 'summary', attachment: { mime: 'application/octet-stream', data: 'AA==' } }];
+  setPrivateFiles(payload);
+  payload[0].path = '/contact.txt';
+  payload[0].text = 'changed';
+  payload[0].attachment!.data = '/w==';
+  payload.push({ path: '/private/late.txt', text: 'late' });
+  const mounted = files.find(file => file.path === '/private/copy.bin')!;
+  assert.deepEqual(mounted, { path: '/private/copy.bin', text: 'summary', attachment: { mime: 'application/octet-stream', data: 'AA==' } });
+  assert.ok(Object.isFrozen(mounted));
+  assert.ok(Object.isFrozen(mounted.attachment));
+  assert.ok(Object.isFrozen(files));
+  assert.deepEqual(texts(run('cat /private/copy.bin')), ['summary']);
+  expectError('cat /private/late.txt', /no such file or directory/);
+});
+
+test('replace and clear invalidate derived caches immediately and never retain old file entries', () => {
+  const changes: boolean[] = [];
+  const unsubscribe = onFilesChanged(() => { changes.push(isVaultUnlocked()); });
+  try {
+    unlockFixture();
+    assert.equal(run('open blogmaker').file, '/private/projects/blogmaker.md');
+    assert.ok(completeCommand('cat /private/projects/bl', initial).candidates.length);
+    setPrivateFiles([{ path: '/private/new.txt', text: 'new text' }]);
+    assert.deepEqual(texts(run('private')), ['new.txt']);
+    expectError('cat /private/projects/blogmaker.md', /no such file or directory/);
+    assert.deepEqual(completeCommand('cat /private/projects/bl', initial).candidates, []);
+    assert.throws(() => setPrivateFiles([{ path: '/wrong.txt', text: 'wrong' }]), /vault:/);
+    assert.deepEqual(changes, [true, true]);
+    clearPrivateFiles();
+    assert.deepEqual(changes, [true, true, false]);
+    assert.equal(files, manifest.files);
+    assert.deepEqual(projectFiles, []);
+    assert.ok(!texts(run('tree /')).some(text => text.includes('new.txt')));
+    assert.deepEqual(completeCommand('cat /private/new', initial).candidates, []);
+  } finally { unsubscribe(); }
+});
+
+test('locking exposes only the synthetic private directory in root listings and traversal', () => {
+  unlockFixture();
+  clearPrivateFiles();
+  for (const command of ['ls /', 'tree /', 'find /']) {
+    const result = run(command);
+    assert.ok(!result.lines.some(line => line.tone === 'error'), command);
+    assert.ok(result.lines.some(line => line.command === 'private'), command);
+    for (const file of privateFixture) {
+      assert.ok(!result.lines.some(line => line.text.includes(file.path)), command);
+      assert.ok(!result.lines.some(line => line.text.includes(basename(file.path))), command);
+    }
+  }
+  assert.deepEqual(run('ls').lines.find(line => line.text === 'private/'), { text: 'private/', tone: 'directory', command: 'private' });
+  assert.deepEqual(texts(run('find / -type f')).filter(path => path.startsWith('/private/')), []);
+  assert.deepEqual(texts(run('search PRIVATE_FIXTURE_ONLY')), []);
+  assert.deepEqual(texts(run('search blogmaker')), []);
+});
+
+test('every private source and alias requests one unlock with the exact original standalone command', () => {
+  const commands = [
+    'private', 'projects', 'readme', 'cat /private/README.md', 'cat /contact.txt /private/missing.txt',
+    'cd /private', 'ls /private', 'ls /private/guessed/', 'tree /private', 'find /private/unknown',
+    'grep x /private/missing.txt', 'head -2 /private/missing.txt', 'tail /private/missing.txt', 'wc /private/missing.txt',
+    'more /private/missing.txt', 'less /private/missing.txt', '/private/missing.txt', './private/README.md',
+    'open /private/README.md', 'open /private/', 'open https://sakauma.github.io/private/README.md',
+    'open /private/%E9%99%84%E4%BB%B6%20%E7%A9%BA%E6%A0%BC.bin', 'download /contact.txt',
+    '  cat   "/private/README.md"  ',
+  ];
+  for (const command of commands) {
+    assert.deepEqual(run(command), { lines: [], state: initial, effect: { type: 'unlock', command } }, command);
+  }
+  const state = { ...initial, cwd: '/private/projects' };
+  assert.deepEqual(run('cat blogmaker.md', state), { lines: [], state, effect: { type: 'unlock', command: 'cat blogmaker.md' } });
+  assert.deepEqual(run('pwd', state), { lines: [], state, effect: { type: 'unlock', command: 'pwd' } });
+  expectError('pwd | wc', /private: locked/, state);
+  expectError('readme extra', /usage/);
+  expectError('projects extra', /usage/);
+  expectError('private extra', /usage/);
+});
+
+test('locked paths abort complete pipelines without prompting or executing earlier stages', t => {
+  let calls = 0;
+  t.mock.method(Date.prototype, 'toISOString', () => { calls++; return '2026-01-01T00:00:00.000Z'; });
+  for (const command of [
+    'cat /private/missing.txt', 'cat /contact.txt /private/missing.txt', 'private', 'projects', 'readme',
+    'ls /private', 'tree /private', 'find / /private', 'open /private/README.md', '/private/README.md',
+    'grep x /private/README.md', 'head /private/README.md', 'tail /private/README.md', 'wc /private/README.md',
+    'more /private/README.md', 'less /private/README.md', 'download /contact.txt',
+  ]) {
+    expectError(`date | ${command}`, /private: locked/);
+    expectError(`${command} | wc`, /private: locked/);
+  }
+  expectError('theme light | cat /private/README.md', /private: locked/);
+  assert.equal(calls, 0);
+  assert.equal(isVaultUnlocked(), false);
+});
+
+test('unlock and lock enforce zero arguments and standalone effects without mutating content', () => {
+  assert.deepEqual(run('unlock'), { lines: [], state: initial, effect: { type: 'unlock' } });
+  assert.deepEqual(run('lock'), { lines: [], state: initial, effect: { type: 'lock' } });
+  assert.equal(isVaultUnlocked(), false);
+  unlockFixture();
+  const state: ShellState = { cwd: '/private/projects', theme: 'amber', motion: false };
+  assert.deepEqual(run('lock', state), { lines: [], state: { ...state, cwd: '/' }, effect: { type: 'lock' } });
+  assert.equal(isVaultUnlocked(), true, 'the browser consumes the lock effect and clears its other private references');
+  for (const command of ['unlock', 'lock']) {
+    expectError(`${command} extra`, /usage/);
+    expectError(`${command} | wc`, /only text-producing commands/);
+    expectError(`echo x | ${command}`, /only text-producing commands/);
+  }
+  assert.deepEqual(run('private').lines, run('ls /private').lines);
+  assert.equal(run('private').effect, undefined);
+  assert.deepEqual(texts(run('private | wc -l')), [String(directoryNames('/private').length)]);
+});
+
+test('download needs an unlocked standalone command and preserves both text and attachment paths', () => {
+  assert.deepEqual(run('download /contact.txt').effect, { type: 'unlock', command: 'download /contact.txt' });
+  unlockFixture();
+  for (const file of [...privateFixture, manifest.files[0]]) {
+    const command = `download ${quote(file.path)}`;
+    assert.deepEqual(run(command), { lines: [], state: initial, effect: { type: 'download', file: file.path } });
+    expectError(`${command} | wc`, /only text-producing commands/);
+    expectError(`echo x | ${command}`, /only text-producing commands/);
+  }
+  assert.deepEqual(run('download -- ../README.md', { ...initial, cwd: '/private/projects' }).effect, { type: 'download', file: '/private/README.md' });
+  expectError('download', /usage/);
+  expectError('download /private/README.md /contact.txt', /usage/);
+  expectError('download /private', /is a directory/);
+  expectError('download /private/missing', /no such file or directory/);
+  expectError('download /private/README.md/', /not a directory/);
+  expectError('download -x /contact.txt', /unknown option/);
+});
+
+test('attachment sources expose their text summary, Unicode path and byte-for-byte base64 only in mounted data', () => {
+  unlockFixture();
+  const attachment = privateFixture.find(file => file.attachment)!;
+  const command = quote(attachment.path);
+  const expected = attachment.text.trimEnd().split('\n');
+  assert.deepEqual(texts(run(`cat ${command}`)), expected);
+  assert.deepEqual(texts(run(`open ${command}`)), expected);
+  assert.deepEqual(texts(run(`open https://sakauma.github.io${encodeURI(attachment.path)}`)), expected);
+  assert.deepEqual(texts(run(`open ${quote(encodeURI(attachment.path))}`)), expected);
+  expectError('open /private/README.md/', /not a directory/);
+  assert.deepEqual(texts(run(`${command} | cat`)), expected);
+  assert.deepEqual(texts(run(`head -1 ${command}`)), expected.slice(0, 1));
+  assert.ok(!texts(run(`cat ${command}`)).join('\n').includes(attachment.attachment!.data));
+  assert.equal(files.find(file => file.path === attachment.path)?.attachment?.data, 'AAEC/w==');
+  assert.deepEqual(completeCommand('download "/private/附件', initial), {
+    value: 'download "/private/附件 空格.bin" ', candidates: ['/private/附件 空格.bin'],
+  });
+  assert.deepEqual(completeCommand(`download ${command} `, initial).candidates, []);
+});
+
+test('private navigation uses command buttons and never maps files onto public article URLs', () => {
+  unlockFixture();
+  for (const file of privateFixture) {
+    assert.equal(hrefForFile(file.path), undefined);
+    assert.equal(hrefForCommand(`cat ${quote(file.path)}`), undefined);
+  }
+  assert.equal(hrefForFile('/private'), undefined);
+  assert.equal(hrefForCommand('private'), undefined);
+  const listing = run('ls /private/projects');
+  for (const line of listing.lines) {
+    assert.ok(line.command?.startsWith('cat /private/'));
+    assert.equal(hrefForCommand(line.command!), undefined);
+    assert.ok(run(line.command!).file?.startsWith('/private/'));
+  }
+  for (const post of posts) assert.equal(hrefForFile(post.file), post.path);
+});
+
+test('help and completion reveal owner commands and private filenames only after unlocking', () => {
+  for (const prefix of ['readm', 'pro', 'down', 'loc']) assert.deepEqual(completeCommand(prefix, initial).candidates, [], prefix);
+  assert.deepEqual(completeCommand('unlo', initial).candidates, ['unlock']);
+  assert.deepEqual(completeCommand('pri', initial).candidates, ['private', 'private/']);
+  for (const command of ['cat', 'ls', 'cd', 'find', 'head', 'tail', 'wc', 'more', 'less', 'open', 'download']) {
+    assert.deepEqual(completeCommand(`${command} /private/`, initial).candidates, [], command);
+  }
+  assert.deepEqual(completeCommand('/private/', initial).candidates, []);
+  assert.deepEqual(completeCommand('cat ', { ...initial, cwd: '/private/projects' }).candidates, []);
+  const publicHelp = texts(run('help')).join('\n');
+  assert.match(publicHelp, /unlock · private/);
+  assert.doesNotMatch(publicHelp, /\breadme\b|\bprojects\b|\bdownload\b|\block\b/);
+  unlockFixture();
+  for (const [prefix, command] of [['readm', 'readme'], ['pro', 'projects'], ['down', 'download'], ['loc', 'lock']]) {
+    assert.deepEqual(completeCommand(prefix, initial).candidates, [command]);
+  }
+  const privateHelp = texts(run('help')).join('\n');
+  for (const command of ['readme', 'projects', 'download', 'lock']) assert.match(privateHelp, new RegExp(`\\b${command}\\b`));
+  assert.ok(completeCommand('cat /private/', initial).candidates.length > 0);
+  clearPrivateFiles();
+  assert.equal(texts(run('help')).join('\n'), publicHelp);
+  assert.deepEqual(completeCommand('open blog', initial).candidates, []);
+  assert.deepEqual(completeCommand('cat /private/', initial).candidates, []);
+});
+
+test('password input detection finds quoted and escaped unlock at every pipeline position without executing', t => {
+  let calls = 0;
+  t.mock.method(Date.prototype, 'toISOString', () => { calls++; return 'never'; });
+  for (const input of [
+    'unlock', '  unlock synthetic-secret  ', '"unlock" synthetic-secret', "'unlock' 'synthetic-secret'",
+    'un"lo"ck synthetic-secret', 'unlo\\ck synthetic-secret', 'date | unlock synthetic-secret',
+    'unlock synthetic-secret | wc', 'date | "unlock" "synthetic-secret" | less',
+    '| unlock synthetic-secret', 'echo x || unlock synthetic-secret', 'unlock "synthetic-secret',
+    'date | "unlock synthetic-secret', "'unlock synthetic-secret", 'unlock synthetic-secret |',
+    'unlock synthetic-secret\\', 'date | unlo\\ck "synthetic-secret',
+  ]) assert.equal(passwordCommandInput(input), true, input);
+  for (const input of [
+    '', '   ', 'echo unlock synthetic-secret', 'echo "unlock synthetic-secret"', 'echo "a|unlock secret"',
+    'echo a\\|unlock secret', 'unlocked synthetic-secret', 'lock', 'cat /private/unlock',
+    '"unlock synthetic-secret"', 'date | echo unlock', 'echo "unfinished unlock secret',
+  ]) assert.equal(passwordCommandInput(input), false, input);
+  for (const input of ['unlock "synthetic|secret"', 'unlock synthetic\\|secret', 'unlock "unfinished|secret']) {
+    assert.equal(passwordCommandInput(input, true), true, input);
+  }
+  for (const input of ['unlock | wc', 'date | unlock', 'unlock secret |', 'echo | unlock "unfinished|secret']) {
+    assert.equal(passwordCommandInput(input, true), false, input);
+  }
+  assert.equal(calls, 0);
+  assert.equal(isVaultUnlocked(), false);
+});
+
+test('private source metadata survives relative paths, filters and paging for internal link navigation', () => {
+  unlockFixture();
+  for (const command of ['cat /private/lab/README.txt', 'cat private/lab/README.txt | head -2 | less', 'grep . /private/lab/README.txt']) {
+    const lines = run(command).lines;
+    assert.ok(lines.length);
+    assert.ok(lines.every(line => line.sourceFile === '/private/lab/README.txt'), command);
+  }
+  const relative = run('cat README.txt', { ...initial, cwd: '/private/lab' });
+  assert.ok(relative.lines.every(line => line.sourceFile === '/private/lab/README.txt'));
+  assert.ok(run('cat /about.txt').lines.every(line => line.sourceFile === undefined));
 });

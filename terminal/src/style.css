@@ -145,7 +145,15 @@ button { border: 0; background: none; padding: 0; }
 #history-match { margin-top: 8px; color: var(--ink); white-space: pre-wrap; }
 #history-panel > .muted { font-size: 11px; }
 #jump-latest { position: fixed; right: max(20px, calc((100vw - 1080px) / 2)); bottom: max(18px, env(safe-area-inset-bottom, 0px)); z-index: 2; background: var(--bg); color: var(--accent); padding: 3px 12px; font-size: 12px; }
-#command-form, #history-panel { scroll-margin-block: 28px; }
+#command-form, #history-panel, #unlock-form { scroll-margin-block: 28px; }
+#unlock-form { margin: 12px 0; min-width: 0; }
+.unlock-heading { color: var(--path); margin-bottom: 8px; }
+.unlock-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+#unlock-password { min-width: 110px; max-width: 28ch; flex: 1 1 14ch; border: 0; border-bottom: 1px solid var(--line); background: none; padding: 4px 0; font-size: 16px; caret-color: var(--accent); }
+.unlock-row button { min-height: 44px; min-width: 44px; color: var(--accent); }
+.unlock-row button:disabled { color: var(--muted); cursor: wait; }
+#unlock-status { min-height: 1.75em; color: var(--warning); margin-top: 6px; }
+#vault-command { min-height: 32px; }
 .status-line { display: flex; align-items: center; gap: 16px; flex: 0 0 auto; min-height: 35px; margin-bottom: 17px; border-top: 1px solid var(--line); font-size: 11px; color: var(--muted); }
 .session-label { background: var(--accent); color: var(--bg); padding: 1px 8px; font-weight: 500; }
 .status-directory { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

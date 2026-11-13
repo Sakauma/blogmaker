@@ -1,11 +1,12 @@
 import '@fontsource/ibm-plex-mono/latin-400.css';
 import '@fontsource/ibm-plex-mono/latin-500.css';
 import './style.css';
-import { runCommand, completeCommand, type ShellState, type ShellLine, type Theme } from './shell';
+import { runCommand, completeCommand, passwordCommandInput, type ShellState, type ShellLine, type Theme } from './shell';
 import { AsciiAnimation } from './ascii';
 import { Pager } from './pager';
 import { editCommandInput } from './editor';
-import { profile, posts, routeFor, hrefForCommand, hrefForFile } from './content';
+import { manifest, files, profile, posts, routeFor, hrefForCommand, hrefForFile, setPrivateFiles, clearPrivateFiles, isVaultUnlocked } from './content';
+import { decryptPrivateVault, privateDownload } from './vault';
 import { appendContentText } from './links';
 
 const root = document.documentElement;
@@ -37,6 +38,11 @@ app.innerHTML = `
         <div class="input-editor"><textarea id="command-input" rows="1" maxlength="4096" aria-label="终端命令" aria-describedby="keyboard-help" autocomplete="off" autocapitalize="off" spellcheck="false" enterkeyhint="send"></textarea><span class="empty-cursor" aria-hidden="true"></span></div>
         <button type="submit" class="enter-key" aria-label="执行命令" title="Enter">↵</button>
       </form>
+      <form id="unlock-form" hidden>
+        <div class="unlock-heading">private — 输入访问密码</div>
+        <div class="unlock-row"><label for="unlock-password">password:</label><input id="unlock-password" name="password" type="password" aria-label="访问密码" autocomplete="current-password" autocapitalize="off" spellcheck="false" maxlength="4096" required /><button id="unlock-submit" type="submit">解锁</button><button id="unlock-cancel" type="button">取消</button></div>
+        <div id="unlock-status" role="status" aria-live="polite"></div>
+      </form>
       <div id="completion-hints" class="completion-hints" role="status" hidden></div>
       <div id="history-panel" hidden>
         <label for="history-search">(reverse-i-search):</label>
@@ -46,7 +52,7 @@ app.innerHTML = `
       <div id="keyboard-help" class="keyboard-help"><span>Tab 补全</span><span>↑↓ 历史</span><span>Ctrl+L 清屏</span><span class="desktop-help">Ctrl+R 搜索</span></div>
       <button id="jump-latest" type="button" hidden>↓ 回到输入行</button>
     </div>
-    <footer class="status-line"><span class="session-label">0:shell<span aria-hidden="true">*</span></span><span class="status-directory">~</span><span class="status-right"><button type="button" id="theme-command" data-command="theme light" aria-label="切换终端主题">dark</button><span class="status-divider">│</span><button type="button" id="motion-command" data-command="motion off" aria-label="切换字符动效">motion:on</button><span class="encoding">UTF-8</span></span></footer>
+    <footer class="status-line"><span class="session-label">0:shell<span aria-hidden="true">*</span></span><span class="status-directory">~</span><span class="status-right"><button type="button" id="vault-command" data-command="unlock" aria-label="解锁私密资料">unlock</button><span class="status-divider">│</span><button type="button" id="theme-command" data-command="theme light" aria-label="切换终端主题">dark</button><span class="status-divider">│</span><button type="button" id="motion-command" data-command="motion off" aria-label="切换字符动效">motion:on</button><span class="encoding">UTF-8</span></span></footer>
   </main>`;
 
 const log = document.querySelector<HTMLElement>('#terminal-log')!;
@@ -58,6 +64,14 @@ const historyPanel = document.querySelector<HTMLElement>('#history-panel')!;
 const historySearch = document.querySelector<HTMLInputElement>('#history-search')!;
 const historyMatch = document.querySelector<HTMLElement>('#history-match')!;
 const jump = document.querySelector<HTMLButtonElement>('#jump-latest')!;
+const unlockForm = document.querySelector<HTMLFormElement>('#unlock-form')!;
+const unlockPassword = document.querySelector<HTMLInputElement>('#unlock-password')!;
+const unlockStatus = document.querySelector<HTMLElement>('#unlock-status')!;
+const unlockSubmit = document.querySelector<HTMLButtonElement>('#unlock-submit')!;
+let unlockGeneration = 0;
+let unlockController: AbortController | null = null;
+let pendingUnlock: string | undefined;
+const downloads = new Set<string>();
 const pathLabel = (): string => state.cwd === '/' ? '~' : `~${state.cwd}`;
 function node<K extends keyof HTMLElementTagNameMap>(tag: K, className: string, text = ''): HTMLElementTagNameMap[K] {
   const result = document.createElement(tag);
@@ -88,7 +102,7 @@ function linesInto(container: HTMLElement, lines: ShellLine[]): void {
       command.type = 'button';
       command.dataset.command = line.command;
       row.append(command);
-    } else if (line.markup) appendContentText(row, line.text);
+    } else if (line.markup) appendContentText(row, line.text, line.sourceFile);
     else row.textContent = line.text || '\u00a0';
     container.append(row);
   }
@@ -130,6 +144,12 @@ function updateUI(): void {
   root.dataset.motion = state.motion ? 'on' : 'off';
   document.querySelector('#prompt-path')!.textContent = pathLabel();
   document.querySelector('.status-directory')!.textContent = pathLabel();
+  root.dataset.vault = isVaultUnlocked() ? 'unlocked' : 'locked';
+  const vaultButton = document.querySelector<HTMLButtonElement>('#vault-command')!;
+  vaultButton.hidden = !manifest.vault;
+  vaultButton.textContent = isVaultUnlocked() ? 'lock' : 'unlock';
+  vaultButton.dataset.command = isVaultUnlocked() ? 'lock' : 'unlock';
+  vaultButton.setAttribute('aria-label', isVaultUnlocked() ? '锁定私密资料' : '解锁私密资料');
   const theme = document.querySelector<HTMLButtonElement>('#theme-command')!;
   theme.textContent = state.theme;
   theme.dataset.command = `theme ${state.theme === 'dark' ? 'light' : state.theme === 'light' ? 'amber' : 'dark'}`;
@@ -144,7 +164,7 @@ function resizeInput(): void {
   form.classList.toggle('has-text', input.value.length > 0);
 }
 function updateJump(): void {
-  if (pager) { jump.hidden = true; return; }
+  if (pager || !unlockForm.hidden) { jump.hidden = true; return; }
   const bounds = form.getBoundingClientRect();
   const viewportTop = window.visualViewport?.offsetTop ?? 0;
   const viewportBottom = viewportTop + (window.visualViewport?.height ?? window.innerHeight);
@@ -154,12 +174,15 @@ function scrollToPrompt(): void {
   requestAnimationFrame(() => {
     if (pager) return;
     // Keep a visible prompt still. Only reveal it when an explicit command needs it.
-    const target = historyPanel.hidden ? form : historyPanel;
+    const target = !unlockForm.hidden ? unlockForm : historyPanel.hidden ? form : historyPanel;
     target.scrollIntoView({ block: 'nearest', behavior: 'instant' });
     updateJump();
   });
 }
-function focusInput(): void { if (!pager) { input.focus({ preventScroll: true }); resizeInput(); } }
+function focusInput(): void {
+  if (!unlockForm.hidden) { if (!unlockPassword.disabled) unlockPassword.focus({ preventScroll: true }); return; }
+  if (!pager) { input.focus({ preventScroll: true }); resizeInput(); }
+}
 function stopAnimation(): void { animation?.stop(); animation = null; }
 function stopPager(resume = false): void {
   if (!pager) return;
@@ -176,10 +199,104 @@ function stopPager(resume = false): void {
   if (resume) { focusInput(); scrollToPrompt(); }
   updateJump();
 }
-function clear(): void { stopPager(); stopAnimation(); log.replaceChildren(); hints.hidden = true; }
+function closeUnlock(resume = false): void {
+  unlockGeneration++;
+  unlockController?.abort();
+  unlockController = null;
+  pendingUnlock = undefined;
+  unlockPassword.value = '';
+  unlockPassword.disabled = false;
+  unlockSubmit.disabled = false;
+  unlockStatus.textContent = '';
+  unlockForm.hidden = true;
+  form.hidden = Boolean(pager);
+  if (resume) { focusInput(); scrollToPrompt(); }
+}
+function requestUnlock(command?: string): void {
+  closeUnlock();
+  if (!manifest.vault) return;
+  pendingUnlock = command;
+  historyPanel.hidden = true;
+  hints.hidden = true;
+  form.hidden = true;
+  unlockForm.hidden = false;
+  jump.hidden = true;
+  unlockPassword.focus({ preventScroll: true });
+  scrollToPrompt();
+}
+function lockVault(address = true): void {
+  closeUnlock();
+  clearPrivateFiles();
+  for (const url of downloads) URL.revokeObjectURL(url);
+  downloads.clear();
+  commands.length = 0;
+  historyIndex = searchIndex = 0;
+  draft = searchDraft = '';
+  searchMatches = [];
+  historySearch.value = input.value = '';
+  historyMatch.textContent = hints.textContent = '';
+  historyPanel.hidden = true;
+  window.getSelection()?.removeAllRanges();
+  state = { ...state, cwd: '/' };
+  clear();
+  showHome();
+  if (address) history.replaceState(null, '', '/');
+  document.title = 'Sakauma | Egor Izmaylov';
+  updateUI();
+  focusInput();
+  window.scrollTo(0, 0);
+}
+function downloadFile(path: string): void {
+  const file = files.find(file => file.path === path);
+  if (!file || !isVaultUnlocked()) return;
+  const download = privateDownload(file);
+  downloads.add(download.url);
+  const link = document.createElement('a');
+  link.href = download.url;
+  link.download = download.name;
+  link.hidden = true;
+  document.body.append(link);
+  link.click();
+  link.remove();
+  window.setTimeout(() => { URL.revokeObjectURL(download.url); downloads.delete(download.url); }, 60000);
+}
+unlockForm.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  if (unlockController || !manifest.vault || unlockForm.hidden || !unlockPassword.value) return;
+  const password = unlockPassword.value;
+  unlockPassword.value = '';
+  unlockPassword.disabled = unlockSubmit.disabled = true;
+  unlockStatus.textContent = '正在解锁…';
+  const generation = unlockGeneration;
+  const controller = new AbortController();
+  unlockController = controller;
+  const pending = pendingUnlock;
+  try {
+    const privateFiles = await decryptPrivateVault(manifest.vault.url, password, controller.signal);
+    if (controller.signal.aborted || generation !== unlockGeneration) return;
+    setPrivateFiles(privateFiles);
+    closeUnlock();
+    updateUI();
+    if (pending) execute(pending);
+    else { state = { ...state, cwd: '/private' }; execute('ls'); }
+    if (state.cwd !== '/private' && !state.cwd.startsWith('/private/')) { state = { ...state, cwd: '/private' }; updateUI(); }
+    if (state.cwd.startsWith('/private') && location.pathname !== '/private/') history.pushState(null, '', '/private/');
+    if (location.pathname === '/private/') document.title = '私密资料 | Sakauma';
+  } catch (error) {
+    if (controller.signal.aborted || generation !== unlockGeneration) return;
+    unlockController = null;
+    unlockPassword.disabled = unlockSubmit.disabled = false;
+    unlockStatus.textContent = error instanceof Error ? error.message : '解锁失败，请重试。';
+    unlockPassword.focus({ preventScroll: true });
+  }
+});
+document.querySelector('#unlock-cancel')!.addEventListener('click', () => closeUnlock(true));
+function clear(): void { closeUnlock(); stopPager(); stopAnimation(); log.replaceChildren(); hints.hidden = true; }
 function execute(raw: string, options: { reveal?: 'prompt' | 'start' | 'none'; address?: boolean } = {}): void {
-  const command = raw.trim();
+  const sensitive = passwordCommandInput(raw);
+  const command = sensitive ? 'unlock' : raw.trim();
   if (!command) { focusInput(); return; }
+  closeUnlock();
   stopPager();
   const isSetting = /^(motion|theme)(\s|$)/.test(command);
   if (!isSetting) stopAnimation();
@@ -190,7 +307,7 @@ function execute(raw: string, options: { reveal?: 'prompt' | 'start' | 'none'; a
   input.value = '';
   hints.hidden = true;
   historyPanel.hidden = true;
-  const result = runCommand(command, state);
+  const result = runCommand(sensitive && !passwordCommandInput(raw, true) ? raw : command, state);
   if (result.effect?.type === 'document') clear();
   const output = entry(command);
   if (result.state.theme !== state.theme) save('theme', result.state.theme);
@@ -203,6 +320,9 @@ function execute(raw: string, options: { reveal?: 'prompt' | 'start' | 'none'; a
   switch (result.effect?.type) {
     case 'clear': clear(); break;
     case 'home': clear(); showHome(); break;
+    case 'unlock': requestUnlock(result.effect.command); break;
+    case 'lock': lockVault(options.address !== false); return;
+    case 'download': downloadFile(result.effect.file); break;
     case 'pager':
       root.dataset.pagerActive = 'true';
       output.parentElement?.classList.add('pager-entry');
@@ -223,14 +343,14 @@ function execute(raw: string, options: { reveal?: 'prompt' | 'start' | 'none'; a
       break;
   }
   if (options.address !== false && !result.lines.some(line => line.tone === 'error')) {
-    const href = result.effect?.type === 'home' ? '/' : result.file ? hrefForFile(result.file) : undefined;
+    const href = result.effect?.type === 'home' ? '/' : result.effect?.type === 'unlock' || result.file?.startsWith('/private/') ? '/private/' : result.file ? hrefForFile(result.file) : undefined;
     if (href) {
       const route = routeFor(href);
       if (location.pathname !== new URL(href, location.origin).pathname) history.pushState(null, '', href);
       document.title = href === '/' ? 'Sakauma | Egor Izmaylov' : `${route?.title ?? profile.brand} | Sakauma`;
     }
   }
-  if (pager) return;
+  if (pager || !unlockForm.hidden) return;
   focusInput();
   if (result.effect?.type === 'home') { window.scrollTo(0, 0); updateJump(); return; }
   if (options.reveal === 'start' || result.effect?.type === 'document') requestAnimationFrame(() => {
@@ -308,8 +428,13 @@ historySearch.addEventListener('keydown', (event) => {
 });
 document.addEventListener('keydown', (event) => {
   if (event.isComposing || event.keyCode === 229 || event.defaultPrevented) return;
-  if (pager) { pager.handleKey(event); return; }
   const control = (event.ctrlKey || event.metaKey) && !event.altKey;
+  if (!unlockForm.hidden) {
+    const selection = unlockPassword.selectionStart !== unlockPassword.selectionEnd || Boolean(window.getSelection()?.toString());
+    if (event.key === 'Escape' || (control && event.key.toLowerCase() === 'c' && !selection)) { event.preventDefault(); closeUnlock(true); }
+    return;
+  }
+  if (pager) { pager.handleKey(event); return; }
   if (control && event.key.toLowerCase() === 'l') { event.preventDefault(); clear(); focusInput(); scrollToPrompt(); }
   else if (control && event.key.toLowerCase() === 'r') { event.preventDefault(); startSearch(); }
   else if ((control && event.key.toLowerCase() === 'c') || event.key === 'Escape') {
@@ -321,7 +446,7 @@ document.addEventListener('keydown', (event) => {
     event.preventDefault();
     if (!historyPanel.hidden) { closeSearch(false); return; }
     stopAnimation();
-    if (input.value) { const output = entry(`${input.value} ^C`); output.remove(); }
+    if (input.value) { const output = entry(`${passwordCommandInput(input.value) ? 'unlock' : input.value} ^C`); output.remove(); }
     input.value = '';
     hints.hidden = true;
     historyIndex = commands.length;
@@ -345,7 +470,7 @@ document.addEventListener('click', (event) => {
     return;
   }
   const command = event.target.closest<HTMLElement>('[data-command]')?.dataset.command;
-  if (command) execute(command, hrefForCommand(command) ? { reveal: 'start' } : {});
+  if (command) execute(command, hrefForCommand(command) || /^cat\s+(?:--\s+)?['"]?\/private\//.test(command) ? { reveal: 'start' } : {});
 });
 window.addEventListener('popstate', () => {
   clear();
@@ -364,8 +489,9 @@ scrollback.addEventListener('click', (event) => {
   if (event.target === scrollback && !window.getSelection()?.toString()) focusInput();
 });
 window.addEventListener('scroll', updateJump, { passive: true });
-window.addEventListener('resize', updateJump, { passive: true });
-window.visualViewport?.addEventListener('resize', updateJump, { passive: true });
+function viewportChanged(): void { if (!unlockForm.hidden) scrollToPrompt(); else updateJump(); }
+window.addEventListener('resize', viewportChanged, { passive: true });
+window.visualViewport?.addEventListener('resize', viewportChanged, { passive: true });
 window.visualViewport?.addEventListener('scroll', updateJump, { passive: true });
 jump.addEventListener('click', () => { focusInput(); scrollToPrompt(); });
 media.addEventListener('change', (event) => {
@@ -374,7 +500,10 @@ media.addEventListener('change', (event) => {
   animation?.setMotion(state.motion);
   updateUI();
 });
-window.addEventListener('pagehide', () => stopAnimation());
+window.addEventListener('pagehide', () => {
+  if (isVaultUnlocked() || !unlockForm.hidden) lockVault();
+  else stopAnimation();
+});
 
 function showHome(): void {
   state = { ...state, cwd: '/' };
@@ -402,4 +531,4 @@ root.classList.add('app-ready');
 resizeInput();
 if (matchMedia('(pointer: fine)').matches) focusInput();
 void document.fonts.ready.then(updateJump);
-if (import.meta.hot) import.meta.hot.dispose(() => { stopPager(); stopAnimation(); });
+if (import.meta.hot) import.meta.hot.dispose(() => { lockVault(false); stopPager(); stopAnimation(); });
