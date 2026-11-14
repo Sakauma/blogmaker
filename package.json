@@ -15,7 +15,6 @@
     "preview": "npm run build && node scripts/preview.mjs"
   },
   "dependencies": {
-    "@fontsource/ibm-plex-mono": "^5.2.0",
     "marked": "^15.0.12",
     "parse5": "^8.0.0",
     "yaml": "^2.9.1"

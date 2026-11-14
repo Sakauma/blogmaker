@@ -403,15 +403,15 @@ test('桌面首屏为深色纯终端，常驻命令行、滚动日志与按钮�
   expect(pageErrors).toEqual([]);
 });
 
-test('欢迎内容是 ASCII 文字，首屏根目录与随后执行的真实 ls 一致', async ({ page }) => {
+test('首页精简为个人简介和三个入口，首屏根目录与真实 ls 一致', async ({ page }) => {
   await visit(page);
-  const welcome = log(page).locator('pre').first();
-  await expect(welcome).toHaveText(/[_/\\|]/);
-  expect((await welcome.innerText()).split('\n').length).toBeGreaterThanOrEqual(3);
+  await expect(log(page).getByRole('heading', { level: 1 })).toHaveText(profile.brand);
+  await expect(log(page).locator('.ascii-logo')).toHaveCount(0);
   const initialListing = log(page).locator('.entry[data-command-line="ls"] > .output');
   await expect(initialListing).toHaveCount(1);
   const initialText = await initialListing.innerText();
-  for (const path of directoryNames('/')) expect(initialText).toContain(path);
+  expect(await initialListing.locator('button').allTextContents()).toEqual(['文章/', '关于', '联系']);
+  for (const path of ['home.txt', '404.txt', 'tags/', 'archives/', 'private/']) expect(initialText).not.toContain(path);
   await expect(screen(page)).toContainText('visitor@sakauma');
   for (const value of [profile.name, profile.role, profile.interests, profile.motto.join(''), `${manifest.posts.length} 篇文章`]) {
     await expect(log(page)).toContainText(value);
@@ -719,15 +719,20 @@ test('cd 改变提示路径，pwd 与相对文件读取使用同一个当前目�
   await expect(output(page)).toHaveText('/');
 });
 
-test('ls posts 管道真实过滤文件列表，再按 manifest 动态计数', async ({ page }) => {
+test('ls -a posts 管道过滤文件名，默认 ls posts 显示完整标题列表', async ({ page }) => {
   await visit(page);
   await runCommand(page, 'clear');
   const name = sortedPostNames()[0];
-  const command = `ls posts | grep ${quote(name)}`;
+  const command = `ls -a posts | grep ${quote(name)}`;
   await runCommand(page, command);
   await expect(output(page)).toHaveText(name);
   expect(await output(page).locator('.output-line').count()).toBe(1);
   await expect(log(page)).toContainText(command);
+  await runCommand(page, 'ls posts');
+  expect(await output(page).locator('button').allTextContents()).toEqual(posts.map(post => `${post.date}  ${post.title}`));
+  await output(page).getByRole('button', { name: `${posts[0].date}  ${posts[0].title}`, exact: true }).click();
+  await expectFile(output(page), posts[0].file);
+  expect(decodeURIComponent(new URL(page.url()).pathname)).toBe(posts[0].path);
   await runCommand(page, 'posts | wc -l');
   await expect(output(page)).toHaveText(String(posts.length));
   await runCommand(page, 'notes | wc -l');
@@ -935,6 +940,70 @@ test('theme light / amber / dark 改变实际颜色，并通过 CLI 存储键跨
     for (const previous of paints) expect(colors).not.toEqual(previous);
     paints.push(colors);
   }
+});
+
+test('风格按钮保留草稿与正文，命令和刷新保留独立的配色及外观', async ({ page }) => {
+  await visit(page);
+  await runCommand(page, 'theme light');
+  await runCommand(page, `cat ${quote(russianPost.file)}`);
+  const content = await output(page).textContent();
+  const url = page.url();
+  await input(page).fill('echo 尚未提交');
+  await page.getByRole('button', { name: '复古', exact: true }).click();
+  await expect(page.locator('html')).toHaveAttribute('data-style', 'retro');
+  await expectTheme(page, 'light');
+  await expect(input(page)).toHaveValue('echo 尚未提交');
+  expect(await output(page).textContent()).toBe(content);
+  expect(page.url()).toBe(url);
+  await expect(page.getByRole('button', { name: '复古', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  expect(await page.evaluate(() => localStorage.getItem('sakauma:cli:style'))).toBe('retro');
+  await page.reload();
+  await waitForPage(page);
+  await expect(page.locator('html')).toHaveAttribute('data-style', 'retro');
+  await expectTheme(page, 'light');
+  await expectFile(output(page), russianPost.file);
+  await runCommand(page, 'style modern');
+  await expect(page.locator('html')).toHaveAttribute('data-style', 'modern');
+  await page.reload();
+  await waitForPage(page);
+  await expect(page.locator('html')).toHaveAttribute('data-style', 'modern');
+  await expectTheme(page, 'light');
+});
+
+test('两种风格在320px保留可操作按钮，分页切换不退出也不丢原文', async ({ page }) => {
+  await page.setViewportSize({ width: 320, height: 740 });
+  await visit(page);
+  for (const name of ['复古', '现代'] as const) {
+    await page.getByRole('button', { name, exact: true }).click();
+    await expectNoHorizontalOverflow(page);
+    await expectInsideViewport(page, page.getByRole('button', { name, exact: true }));
+    await expectInputUsable(page);
+  }
+  const expected = visibleFileLines(longestPost.file);
+  await startPager(page, `less ${quote(longestPost.file)}`, 'less');
+  await pagerNext(page).click();
+  const before = await expectPagerSlice(page, expected);
+  await page.getByRole('button', { name: '复古', exact: true }).click();
+  await expect(page.locator('html')).toHaveAttribute('data-pager-active', 'true');
+  const after = await expectPagerSlice(page, expected);
+  expect(after.start).toBeLessThanOrEqual(before.end);
+  expect(after.end).toBeGreaterThanOrEqual(before.start);
+  await expectNoHorizontalOverflow(page);
+  await pagerClose(page).click();
+  await expectPagerClosed(page);
+});
+
+test('风格切换保留解锁输入并且不发出解密请求', async ({ page }) => {
+  const requests = await installVaultFixture(page);
+  await visit(page);
+  await runCommand(page, 'unlock');
+  await unlockPassword(page).fill(VAULT_PASSWORD);
+  await page.getByRole('button', { name: '复古', exact: true }).click();
+  await expect(unlockForm(page)).toBeVisible();
+  await expect(unlockPassword(page)).toHaveValue(VAULT_PASSWORD);
+  await expectLocked(page);
+  await unlockCancel(page).click();
+  await expectPasswordAbsent(page, requests);
 });
 
 test('motion off / on 更新根状态与 CLI 存储，刷新后保留选择', async ({ page }) => {
@@ -1155,8 +1224,8 @@ for (const mode of ['less', 'more'] as const) {
     await page.setViewportSize({ width: 1100, height: 520 });
     await visit(page);
     const originalURL = page.url();
-    const expected = directoryNames('/posts');
-    await startPager(page, `ls /posts | ${mode}`, mode);
+    const expected = ['.', '..', ...directoryNames('/posts')];
+    await startPager(page, `ls -a /posts | ${mode}`, mode);
     const first = await expectPagerSlice(page, expected);
     expect(first.start).toBe(1);
     expect(first.end).toBeLessThan(expected.length);
@@ -1175,8 +1244,8 @@ for (const mode of ['less', 'more'] as const) {
 test('分页键 Space/PageDown/f 与 b/PageUp 按实际可视页前后移动，g/G 回首尾', async ({ page }) => {
   await page.setViewportSize({ width: 1100, height: 520 });
   await visit(page);
-  const expected = directoryNames('/posts');
-  await startPager(page, 'ls /posts | less', 'less');
+  const expected = ['.', '..', ...directoryNames('/posts')];
+  await startPager(page, 'ls -a /posts | less', 'less');
   const first = await expectPagerSlice(page, expected);
   for (const [forward, backward] of [['Space', 'b'], ['PageDown', 'PageUp'], ['f', 'b']] as const) {
     await page.keyboard.press(forward);
@@ -1204,8 +1273,8 @@ test('分页键 Space/PageDown/f 与 b/PageUp 按实际可视页前后移动，g
 test('分页键 j/k、方向键与 Enter 移一行，Ctrl+D/U 移半页', async ({ page }) => {
   await page.setViewportSize({ width: 1100, height: 620 });
   await visit(page);
-  const expected = directoryNames('/posts');
-  await startPager(page, 'ls /posts | less', 'less');
+  const expected = ['.', '..', ...directoryNames('/posts')];
+  await startPager(page, 'ls -a /posts | less', 'less');
   const first = await expectPagerSlice(page, expected);
   let start = 1;
   for (const key of ['j', 'ArrowDown', 'Enter']) {
@@ -1408,9 +1477,9 @@ for (const action of ['home', 'exit', 'Control+d'] as const) {
     } else await runCommand(page, action);
     await expect.poll(() => new URL(page.url()).pathname).toBe('/');
     await expect(page.locator('#prompt-path')).toHaveText('~');
-    await expect(log(page).locator('.ascii-logo')).toHaveCount(1);
+    await expect(log(page).getByRole('heading', { level: 1 })).toHaveText(profile.brand);
     const listing = log(page).locator('.entry[data-command-line="ls"] > .output');
-    for (const name of directoryNames('/')) await expect(listing).toContainText(name);
+    expect(await listing.locator('button').allTextContents()).toEqual(['文章/', '关于', '联系']);
     await expectTheme(page, 'amber');
     await expectInputUsable(page);
     expect(await page.evaluate(() => Reflect.get(window, '__homeDocumentMarker'))).toBe(marker);
@@ -1672,7 +1741,7 @@ test.describe('私密保险库', () => {
     for (const path of ['/README.md', '/assets.md', '/lab/README.txt']) {
       expect(manifest.files.some(file => file.path === path)).toBe(false);
     }
-    for (const command of ['ls /', 'tree /', 'find /']) {
+    for (const command of ['ls -a /', 'tree /', 'find /']) {
       await runCommand(page, command);
       await expect(output(page)).toContainText('private');
       for (const path of PRIVATE_FILES.map(file => basename(file.path))) await expect(output(page)).not.toContainText(path);
@@ -2196,8 +2265,8 @@ test.describe('390×844 手机终端', () => {
 
   test('手机使用原生按钮前后翻页和退出，320px下可到达末页且禁用下一页', async ({ page }) => {
     await visit(page);
-    const expected = directoryNames('/posts');
-    await input(page).fill('ls /posts | more');
+    const expected = ['.', '..', ...directoryNames('/posts')];
+    await input(page).fill('ls -a /posts | more');
     await submit(page).tap();
     await expect(page.locator('html')).toHaveAttribute('data-pager-active', 'true');
     await expect(pager(page)).toHaveAccessibleName('more 分页阅读');

@@ -1,7 +1,5 @@
-import '@fontsource/ibm-plex-mono/latin-400.css';
-import '@fontsource/ibm-plex-mono/latin-500.css';
 import './style.css';
-import { runCommand, completeCommand, passwordCommandInput, type ShellState, type ShellLine, type Theme } from './shell';
+import { runCommand, completeCommand, passwordCommandInput, type ShellState, type ShellLine, type Theme, type Appearance } from './shell';
 import { AsciiAnimation } from './ascii';
 import { Pager } from './pager';
 import { editCommandInput } from './editor';
@@ -17,6 +15,7 @@ const media = matchMedia('(prefers-reduced-motion: reduce)');
 let state: ShellState = {
   cwd: '/',
   theme: (['dark', 'light', 'amber'].includes(root.dataset.theme ?? '') ? root.dataset.theme : 'dark') as Theme,
+  style: (root.dataset.style === 'retro' ? 'retro' : 'modern') as Appearance,
   motion: root.dataset.motion !== 'off',
 };
 const commands: string[] = [];
@@ -30,7 +29,13 @@ let pager: Pager | null = null;
 
 app.innerHTML = `
   <main id="terminal-screen" aria-label="Sakauma 交互终端">
-    <header class="terminal-title"><span><span class="title-mark">&gt;_</span> sakauma<span class="title-separator"> / </span><span class="muted">dev/tty1</span></span></header>
+    <header class="terminal-title">
+      <span class="title-identity"><span class="title-mark">&gt;_</span> sakauma<span class="title-separator"> / </span><span class="title-context muted">journal</span></span>
+      <div class="style-switch" role="group" aria-label="界面风格">
+        <button type="button" data-style-choice="modern" aria-pressed="true">现代</button>
+        <button type="button" data-style-choice="retro" aria-pressed="false">复古</button>
+      </div>
+    </header>
     <div id="scrollback" role="region" aria-label="终端会话内容">
       <div id="terminal-log" role="log" aria-label="终端输出" aria-live="polite" aria-relevant="additions"></div>
       <form id="command-form" autocomplete="off">
@@ -101,6 +106,7 @@ function linesInto(container: HTMLElement, lines: ShellLine[]): void {
       const command = node('button', 'text-command', line.text);
       command.type = 'button';
       command.dataset.command = line.command;
+      command.title = line.command;
       row.append(command);
     } else if (line.markup) appendContentText(row, line.text, line.sourceFile);
     else row.textContent = line.text || '\u00a0';
@@ -141,7 +147,12 @@ function banner(container: HTMLElement): void {
 }
 function updateUI(): void {
   root.dataset.theme = state.theme;
+  root.dataset.style = state.style;
   root.dataset.motion = state.motion ? 'on' : 'off';
+  document.querySelector('.title-context')!.textContent = state.style === 'retro' ? 'dev/tty1' : 'journal';
+  for (const button of document.querySelectorAll<HTMLButtonElement>('[data-style-choice]')) {
+    button.setAttribute('aria-pressed', String(button.dataset.styleChoice === state.style));
+  }
   document.querySelector('#prompt-path')!.textContent = pathLabel();
   document.querySelector('.status-directory')!.textContent = pathLabel();
   root.dataset.vault = isVaultUnlocked() ? 'unlocked' : 'locked';
@@ -298,7 +309,7 @@ function execute(raw: string, options: { reveal?: 'prompt' | 'start' | 'none'; a
   if (!command) { focusInput(); return; }
   closeUnlock();
   stopPager();
-  const isSetting = /^(motion|theme)(\s|$)/.test(command);
+  const isSetting = /^(motion|theme|style)(\s|$)/.test(command);
   if (!isSetting) stopAnimation();
   if (commands.at(-1) !== command) commands.push(command);
   if (commands.length > 100) commands.shift();
@@ -311,6 +322,7 @@ function execute(raw: string, options: { reveal?: 'prompt' | 'start' | 'none'; a
   if (result.effect?.type === 'document') clear();
   const output = entry(command);
   if (result.state.theme !== state.theme) save('theme', result.state.theme);
+  if (result.state.style !== state.style) save('style', result.state.style);
   // Persist an explicit choice even if it equals the system's current setting.
   if (/^motion\s+(on|off)\s*$/.test(command) && !result.lines.some(line => line.tone === 'error')) save('motion', result.state.motion ? 'on' : 'off');
   state = result.state;
@@ -456,6 +468,17 @@ document.addEventListener('keydown', (event) => {
 });
 document.addEventListener('click', (event) => {
   if (!(event.target instanceof Element)) return;
+  const appearance = event.target.closest<HTMLButtonElement>('[data-style-choice]')?.dataset.styleChoice;
+  if (appearance === 'modern' || appearance === 'retro') {
+    // A visual preference must not close a pager, cancel an unlock, discard an
+    // unfinished command or move the reader to the end of a long document.
+    state = runCommand(`style ${appearance}`, state).state;
+    save('style', state.style);
+    updateUI();
+    resizeInput();
+    requestAnimationFrame(updateJump);
+    return;
+  }
   const link = event.target.closest<HTMLAnchorElement>('a[data-route]');
   if (link && event.button === 0 && !event.ctrlKey && !event.metaKey && !event.shiftKey && !event.altKey) {
     const path = link.dataset.route!;
@@ -470,7 +493,7 @@ document.addEventListener('click', (event) => {
     return;
   }
   const command = event.target.closest<HTMLElement>('[data-command]')?.dataset.command;
-  if (command) execute(command, hrefForCommand(command) || /^cat\s+(?:--\s+)?['"]?\/private\//.test(command) ? { reveal: 'start' } : {});
+  if (command) execute(command, command === 'posts' || hrefForCommand(command) || /^cat\s+(?:--\s+)?['"]?\/private\//.test(command) ? { reveal: 'start' } : {});
 });
 window.addEventListener('popstate', () => {
   clear();
@@ -507,16 +530,24 @@ window.addEventListener('pagehide', () => {
 
 function showHome(): void {
   state = { ...state, cwd: '/' };
-  banner(entry('neofetch'));
+  const intro = node('section', 'home-intro');
+  intro.setAttribute('aria-label', '个人简介');
+  intro.append(node('div', 'home-kicker', `${profile.name} / ${profile.role}`));
+  intro.append(node('h1', 'home-name', profile.brand));
+  const motto = node('p', 'home-motto');
+  for (const [index, part] of profile.motto.entries()) {
+    if (index) motto.append(document.createElement('br'));
+    motto.append(document.createTextNode(part));
+  }
+  intro.append(motto, node('p', 'home-interests', profile.interests));
+  intro.append(node('div', 'home-count', `${posts.length} 篇文章 · 中文 / Русский`));
+  log.append(intro);
   const listing = entry('ls');
   listing.classList.add('directory-grid');
   linesInto(listing, runCommand('ls', state).lines);
   const starters = node('div', 'starter-commands');
-  starters.append(node('span', 'muted', '试试 '));
-  for (const [index, command] of ['posts', 'tags', 'cat about.txt', 'help', 'ascii donut'].entries()) {
-    if (index) starters.append(node('span', 'muted', '  /  '));
-    starters.append(commandLink(command, command));
-  }
+  starters.append(node('span', 'muted', '点击目录，或输入命令。'), commandLink('help', 'help'),
+    node('span', 'muted', ' 查看用法 · '), commandLink('ls -a', 'ls -a'), node('span', 'muted', ' 查看全部文件'));
   log.append(starters);
   updateUI();
 }

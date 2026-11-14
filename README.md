@@ -45,6 +45,23 @@ ascii donut
 
 `posts` 按日期显示全部文章标题，`search 关键词` 搜索公开标题和正文。文件名和文章标题可点击，文章从开头展开；Tab 补全命令、文档路径、参数和选项值，方向键选择历史命令。首页、介绍、联系方式、70 篇既有日志及其标签/分类/归档保持公开。项目、实验、资源索引及内部说明已移入加密私密区。文章链接仍使用原永久 URL，直接打开会启动对应的 `cat` 命令。
 
+默认 `ls` 只显示“文章 / 关于 / 联系”。`ls posts`（或 `cd posts` 后的 `ls`）按日期显示文章标题，不再暴露编号和 `.md` 后缀；点击标题仍打开原文章。`ls -a` 显示完整根目录，`ls -a posts` 显示原始文件名和索引。隐藏仅影响默认列表，`cat`、Tab 补全、`tree`、`find`、旧链接及标签 / 归档等命令仍可访问原文件。按文件名过滤时使用 `ls -a posts | grep ...`；按标题过滤使用 `ls posts | grep ...`。
+
+### 外观与字体
+
+右上角“现代 / 复古”切换界面：现代是留白更充分的文字主页；复古是终端窗口、静态扫描线与荧光标题。切换按钮保留输入草稿、阅读内容、分页位置与私密区状态。外观与配色、动效相互独立，刷新后记住选择：
+
+```text
+style modern
+style retro
+theme dark
+theme light
+theme amber
+motion off
+```
+
+默认使用现代布局；本地偏好键为 `sakauma:cli:style`。禁用浏览器存储时仍能在本次会话中切换。字体改为自托管 **Maple Mono**（英文和俄文），中文使用系统中文字体，避免强制下载大型字库。字体随站点发布，无第三方字体 CDN 请求；许可见 `/FONT-LICENSE.txt`，来源与校验值见 `terminal/src/fonts/README.md`。
+
 文档本身也可以作为命令：直接输入 `/posts/001-2026-01-21.md`、`./about.txt`、`contact` 或 `about`，会清屏并从开头打开。`cat` 保留此前会话，继续使用整页自然滚动；`home`、`exit` 和空输入时的 Ctrl+D 返回首页与根目录，保留历史命令和主题偏好。
 
 ### 分页阅读
@@ -229,4 +246,4 @@ npm run deploy:local
 - `static/`：原静态资源与后续文章图片，按原路径发布。
 - `dist/`：完整发布产物，Git 忽略，直接修改会在下次构建时被覆盖。
 
-YAML 使用 `yaml`，Markdown 使用 `marked`，HTML 转文本使用 `parse5`，以正确处理实体、DOM 层级、诗歌换行和缩进。TypeScript/Vite 编译交互终端，IBM Plex Mono 字体随站点本地发布。依赖版本记录在 `package-lock.json`。
+YAML 使用 `yaml`，Markdown 使用 `marked`，HTML 转文本使用 `parse5`，以正确处理实体、DOM 层级、诗歌换行和缩进。TypeScript/Vite 编译交互终端，Maple Mono 字体随站点本地发布。依赖版本记录在 `package-lock.json`。

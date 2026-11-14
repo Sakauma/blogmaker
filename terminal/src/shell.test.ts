@@ -19,7 +19,7 @@ const unlockFixture = () => setPrivateFiles(privateFixture);
 beforeEach(() => clearPrivateFiles());
 afterEach(() => clearPrivateFiles());
 
-const initial: ShellState = { cwd: '/', theme: 'dark', motion: true };
+const initial: ShellState = { cwd: '/', theme: 'dark', style: 'modern', motion: true };
 const run = (input: string, state: ShellState = initial) => runCommand(input, state);
 const texts = (result: ShellResult) => result.lines.map((line) => line.text);
 const expectError = (input: string, pattern: RegExp, state = initial) => {
@@ -43,21 +43,34 @@ test('pwd reports the absolute website root', () => {
   assert.deepEqual(texts(run('pwd')), ['/']);
 });
 
-test('root listing contains the actual manifest files and directories', () => {
-  assert.deepEqual(texts(run('ls')), [...new Set([...directoryNames('/'), 'private/'])].sort());
-  for (const entry of ['home.txt', 'about.txt', 'contact.txt', 'archives/', 'categories/', 'posts/', 'private/', 'tags/']) {
-    assert.ok(texts(run('ls')).includes(entry), `missing root entry: ${entry}`);
+test('root listing is curated, while ls -a retains every original file and directory', () => {
+  assert.deepEqual(texts(run('ls')), ['文章/', '关于', '联系']);
+  assert.deepEqual(texts(run('ls -a')).slice(2), [...new Set([...directoryNames('/'), 'private/'])].sort());
+  assert.deepEqual(texts(run('ls /', { ...initial, cwd: '/tags' })), ['文章/', '关于', '联系']);
+  for (const file of ['/home.txt', '/about.txt', '/contact.txt', '/posts/index.md']) {
+    assert.deepEqual(texts(run(`cat ${file}`)), fileLines(file));
   }
 });
 
 test('listing lines contain usable cd/cat commands and directory tones', () => {
   const result = run('ls');
-  assert.deepEqual(result.lines.find((line) => line.text === 'private/'), {
-    text: 'private/', tone: 'directory', command: 'private',
+  assert.deepEqual(result.lines[0], {
+    text: '文章/', tone: 'directory', command: 'posts',
   });
-  assert.deepEqual(result.lines.find((line) => line.text === 'about.txt'), {
-    text: 'about.txt', tone: 'plain', command: 'cat /about.txt',
+  assert.deepEqual(result.lines.find((line) => line.text === '关于'), {
+    text: '关于', tone: 'plain', command: 'cat /about.txt',
   });
+});
+
+test('article listings show dates and authored titles, with original file targets', () => {
+  for (const result of [run('ls posts'), run('ls', { ...initial, cwd: '/posts' }), run('ls ~/posts/')]) {
+    assert.deepEqual(texts(result), posts.map(post => `${post.date}  ${post.title}`));
+    assert.deepEqual(result.lines.map(line => line.command), posts.map(post => `cat ${post.file}`));
+    assert.equal(result.lines.length, posts.length);
+  }
+  assert.deepEqual(texts(run('ls -a posts')).slice(2), directoryNames('/posts'));
+  assert.deepEqual(texts(run('ls -l posts')), posts.map(post => `-r--r--r--  ${post.date}  ${post.title}`));
+  assert.deepEqual(texts(run(`ls ${posts[0].file}`)), [basename(posts[0].file)]);
 });
 
 test('ls -al includes dot entries and read-only permissions', () => {
@@ -244,12 +257,13 @@ test('find reports simple absolute paths from a relative directory', () => {
   assert.deepEqual(texts(run('find /contact.txt')), ['/contact.txt']);
 });
 
-test('multi-stage listing pipelines filter filenames and count the output', () => {
+test('multi-stage listing pipelines filter raw filenames or titles and count the output', () => {
   const name = sortedPostNames()[0];
-  assert.deepEqual(texts(run(`ls posts | grep -F ${quote(name)}`)), [name]);
-  assert.deepEqual(texts(run(`ls posts | grep -F ${quote(name)} | wc -l`)), ['1']);
+  assert.deepEqual(texts(run(`ls -a posts | grep -F ${quote(name)}`)), [name]);
+  assert.deepEqual(texts(run(`ls -a posts | grep -F ${quote(name)} | wc -l`)), ['1']);
   assert.deepEqual(texts(run('ls posts | head -n 2 | wc -l')), ['2']);
-  assert.deepEqual(texts(run('ls posts | wc -l')), [String(directoryNames('/posts').length)]);
+  assert.deepEqual(texts(run('ls posts | wc -l')), [String(posts.length)]);
+  assert.deepEqual(texts(run(`ls posts | grep -F ${quote(posts[0].title)}`)), [`${posts[0].date}  ${posts[0].title}`]);
   assert.deepEqual(texts(run('posts | wc -l')), [String(posts.length)]);
 });
 
@@ -283,7 +297,7 @@ test('empty pipeline stages and double pipes are explicit syntax errors', () => 
 });
 
 test('state-changing commands are rejected anywhere in a pipeline atomically', () => {
-  const state: ShellState = { cwd: '/posts', theme: 'dark', motion: true };
+  const state: ShellState = { cwd: '/posts', theme: 'dark', style: 'modern', motion: true };
   const snapshot = { ...state };
   for (const input of ['theme light | wc', 'echo x | motion off', 'cd / | pwd', 'echo x | theme amber | wc']) {
     expectError(input, /only text-producing commands/, state);
@@ -359,7 +373,7 @@ test('prototype property names are never treated as commands or files', () => {
 test('theme changes return a new state and no UI effect', () => {
   for (const theme of ['dark', 'light', 'amber'] as const) {
     const result = run(`theme ${theme}`);
-    assert.deepEqual(result.state, { cwd: '/', theme, motion: true });
+    assert.deepEqual(result.state, { cwd: '/', theme, style: 'modern', motion: true });
     assert.deepEqual(texts(result), [`theme: ${theme}`]);
     assert.equal(result.effect, undefined);
   }
@@ -369,14 +383,35 @@ test('theme changes return a new state and no UI effect', () => {
 });
 
 test('motion updates preserve cwd and theme, without mutating the input', () => {
-  const state: ShellState = { cwd: '/tags', theme: 'amber', motion: true };
+  const state: ShellState = { cwd: '/tags', theme: 'amber', style: 'modern', motion: true };
   const result = run('motion off', state);
-  assert.deepEqual(result.state, { cwd: '/tags', theme: 'amber', motion: false });
+  assert.deepEqual(result.state, { cwd: '/tags', theme: 'amber', style: 'modern', motion: false });
   assert.deepEqual(texts(result), ['motion: off']);
   assert.equal(result.effect, undefined);
   assert.equal(state.motion, true);
   assert.equal(run('motion on', result.state).state.motion, true);
   expectError('motion maybe', /expected on or off/);
+});
+
+test('style changes are independent of colors, cwd and motion and validate atomically', () => {
+  const state: ShellState = { cwd: '/posts', theme: 'amber', style: 'modern', motion: false };
+  for (const style of ['retro', 'modern'] as const) {
+    const result = run(`style ${style}`, state);
+    assert.deepEqual(result.state, { ...state, style });
+    assert.deepEqual(texts(result), [`style: ${style}`]);
+    assert.equal(result.effect, undefined);
+    assert.notEqual(result.state, state);
+  }
+  assert.deepEqual(texts(run('style', state)), ['style: modern']);
+  assert.equal(state.style, 'modern');
+  expectError('style vintage', /expected modern or retro/, state);
+  expectError('style retro extra', /usage/, state);
+  expectError('style retro | wc', /pipeline:/, state);
+  expectError('echo x | style retro', /pipeline:/, state);
+  const retro = { ...state, style: 'retro' as const };
+  for (const command of ['theme light', 'motion on', 'home', 'exit', 'cd /']) assert.equal(run(command, retro).state.style, 'retro');
+  assert.equal(completeCommand('style r', state).value, 'style retro ');
+  assert.equal(completeCommand('style m', state).value, 'style modern ');
 });
 
 test('screen commands expose the exact effect contract', () => {
@@ -597,13 +632,13 @@ test('grep labels multiple file matches and preserves each source line markup', 
 });
 
 test('invalid grep regular expressions are explicit atomic errors in files and pipelines', () => {
-  const state: ShellState = { cwd: '/tags', theme: 'amber', motion: false };
+  const state: ShellState = { cwd: '/tags', theme: 'amber', style: 'modern', motion: false };
   for (const pattern of ['[', '(', '*', '[z-a]']) {
     expectError(`grep ${quote(pattern)} /contact.txt`, /grep: invalid regular expression/, state);
     expectError(`cat /contact.txt | grep ${quote(pattern)} | less`, /grep: invalid regular expression/, state);
     expectError(`theme light | grep ${quote(pattern)}`, /grep: invalid regular expression/, state);
   }
-  assert.deepEqual(state, { cwd: '/tags', theme: 'amber', motion: false });
+  assert.deepEqual(state, { cwd: '/tags', theme: 'amber', style: 'modern', motion: false });
 });
 
 test('find combines basename globs and file types across roots in input order', () => {
@@ -686,7 +721,7 @@ test('wc counts original UTF-8 file bytes and produces multi-file totals', () =>
 });
 
 test('home and exit reset cwd with one home effect and preserve preferences', () => {
-  const state: ShellState = { cwd: '/tags', theme: 'amber', motion: false };
+  const state: ShellState = { cwd: '/tags', theme: 'amber', style: 'modern', motion: false };
   for (const command of ['home', 'exit']) {
     const result = run(command, state);
     assert.deepEqual(result, { lines: [], state: { ...state, cwd: '/' }, effect: { type: 'home' } });
@@ -695,14 +730,14 @@ test('home and exit reset cwd with one home effect and preserve preferences', ()
     expectError(`${command} | pwd`, /only text-producing commands/, state);
     expectError(`echo content | ${command}`, /only text-producing commands/, state);
   }
-  assert.deepEqual(state, { cwd: '/tags', theme: 'amber', motion: false });
+  assert.deepEqual(state, { cwd: '/tags', theme: 'amber', style: 'modern', motion: false });
 });
 
 test('more and less return full file lines with canonical labels and navigation paths', () => {
   const post = posts.reduce((longest, post) => fileText(post.file).length > fileText(longest.file).length ? post : longest);
   const expected = run(`cat ${quote(post.file)}`).lines;
   assert.ok(expected.length > 20, 'the pager receives an article longer than one page');
-  const state: ShellState = { cwd: '/tags', theme: 'light', motion: false };
+  const state: ShellState = { cwd: '/tags', theme: 'light', style: 'modern', motion: false };
   for (const mode of ['more', 'less']) {
     const result = run(`${mode} ${quote(`../posts/../${post.file.slice(1)}`)}`, state);
     assert.deepEqual(result, { lines: expected, state, effect: { type: 'pager', mode, label: post.file }, file: post.file });
@@ -744,7 +779,7 @@ test('pipelines never publish a file navigation path even if their final stage r
 });
 
 test('pagers are allowed only as the last stage and all other display effects remain standalone', () => {
-  const state: ShellState = { cwd: '/tags', theme: 'light', motion: false };
+  const state: ShellState = { cwd: '/tags', theme: 'light', style: 'modern', motion: false };
   for (const input of ['more /contact.txt | wc', 'cat /contact.txt | less | head', 'echo x | more | less']) {
     expectError(input, /more\/less must be the final command/, state);
   }
@@ -820,9 +855,9 @@ test('document paths execute with full text, a document effect and their canonic
     ['contact.txt', '/contact.txt', initial],
     ['./private/README.md', '/private/README.md', initial],
     [post.file, post.file, initial],
-    [basename(post.file), post.file, { cwd: '/posts', theme: 'amber', motion: false }],
-    [`../posts/./${basename(post.file)}`, post.file, { cwd: '/tags', theme: 'light', motion: true }],
-    [`~${post.file}`, post.file, { cwd: '/tags', theme: 'dark', motion: false }],
+    [basename(post.file), post.file, { cwd: '/posts', theme: 'amber', style: 'modern', motion: false }],
+    [`../posts/./${basename(post.file)}`, post.file, { cwd: '/tags', theme: 'light', style: 'modern', motion: true }],
+    [`~${post.file}`, post.file, { cwd: '/tags', theme: 'dark', style: 'modern', motion: false }],
   ];
   for (const [command, file, state] of cases) {
     const result = run(quote(command), state);
@@ -834,7 +869,7 @@ test('document paths execute with full text, a document effect and their canonic
 test('contact and readme aliases open documents while built-in names take precedence over directories', () => {
   unlockFixture();
   for (const [command, file] of [['contact', '/contact.txt'], ['readme', '/private/README.md']]) {
-    const state: ShellState = { cwd: '/posts', theme: 'amber', motion: false };
+    const state: ShellState = { cwd: '/posts', theme: 'amber', style: 'modern', motion: false };
     assert.deepEqual(run(command, state), { lines: run(`cat ${file}`).lines, state, effect: { type: 'document' }, file });
     expectError(`${command} extra`, /usage/, state);
   }
@@ -883,7 +918,7 @@ test('first-token completion includes executable documents and directories in th
   assert.deepEqual(completeCommand('readm', initial), { value: 'readme ', candidates: ['readme'] });
   const post = posts[0];
   const name = basename(post.file);
-  const state: ShellState = { cwd: '/posts', theme: 'light', motion: false };
+  const state: ShellState = { cwd: '/posts', theme: 'light', style: 'modern', motion: false };
   assert.equal(completeCommand(name.slice(0, -3), state).value, `${name} `);
   assert.equal(completeCommand('../private/projects/bl', state).value, '../private/projects/blogmaker.md ');
   assert.deepEqual(completeCommand('README.md ', initial).candidates, []);
@@ -1047,7 +1082,7 @@ test('replace and clear invalidate derived caches immediately and never retain o
 test('locking exposes only the synthetic private directory in root listings and traversal', () => {
   unlockFixture();
   clearPrivateFiles();
-  for (const command of ['ls /', 'tree /', 'find /']) {
+  for (const command of ['ls -a /', 'tree /', 'find /']) {
     const result = run(command);
     assert.ok(!result.lines.some(line => line.tone === 'error'), command);
     assert.ok(result.lines.some(line => line.command === 'private'), command);
@@ -1056,7 +1091,7 @@ test('locking exposes only the synthetic private directory in root listings and 
       assert.ok(!result.lines.some(line => line.text.includes(basename(file.path))), command);
     }
   }
-  assert.deepEqual(run('ls').lines.find(line => line.text === 'private/'), { text: 'private/', tone: 'directory', command: 'private' });
+  assert.deepEqual(run('ls -a').lines.find(line => line.text === 'private/'), { text: 'private/', tone: 'directory', command: 'private' });
   assert.deepEqual(texts(run('find / -type f')).filter(path => path.startsWith('/private/')), []);
   assert.deepEqual(texts(run('search PRIVATE_FIXTURE_ONLY')), []);
   assert.deepEqual(texts(run('search blogmaker')), []);
@@ -1106,7 +1141,7 @@ test('unlock and lock enforce zero arguments and standalone effects without muta
   assert.deepEqual(run('lock'), { lines: [], state: initial, effect: { type: 'lock' } });
   assert.equal(isVaultUnlocked(), false);
   unlockFixture();
-  const state: ShellState = { cwd: '/private/projects', theme: 'amber', motion: false };
+  const state: ShellState = { cwd: '/private/projects', theme: 'amber', style: 'modern', motion: false };
   assert.deepEqual(run('lock', state), { lines: [], state: { ...state, cwd: '/' }, effect: { type: 'lock' } });
   assert.equal(isVaultUnlocked(), true, 'the browser consumes the lock effect and clears its other private references');
   for (const command of ['unlock', 'lock']) {

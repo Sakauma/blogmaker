@@ -2,7 +2,8 @@ import { files, isVaultUnlocked, onFilesChanged, posts, projectFiles, routeFor }
 import type { ContentFile } from './content';
 
 export type Theme = 'dark' | 'light' | 'amber';
-export interface ShellState { cwd: string; theme: Theme; motion: boolean }
+export type Appearance = 'modern' | 'retro';
+export interface ShellState { cwd: string; theme: Theme; style: Appearance; motion: boolean }
 export type Tone = 'plain' | 'muted' | 'accent' | 'warning' | 'error' | 'directory';
 export interface ShellLine { text: string; tone?: Tone; command?: string; markup?: boolean; sourceFile?: string }
 export type Effect =
@@ -24,11 +25,12 @@ const COMMANDS = [
   'about', 'ascii', 'banner', 'cat', 'cd', 'clear', 'coffee', 'contact', 'date', 'echo', 'exit',
   'find', 'grep', 'head', 'help', 'history', 'home', 'less', 'ls', 'matrix', 'more', 'motion', 'neofetch',
   'notes', 'open', 'posts', 'projects', 'pwd', 'readme', 'search', 'sudo', 'tags', 'tail', 'categories', 'archives', 'theme', 'tree', 'wc', 'whoami',
-  'unlock', 'lock', 'private', 'download',
+  'unlock', 'lock', 'private', 'download', 'style',
 ] as const;
 const COMMAND_SET = new Set<string>(COMMANDS);
 const OWNER_COMMANDS = new Set<string>(['projects', 'readme', 'download', 'lock']);
 const THEMES: Theme[] = ['dark', 'light', 'amber'];
+const STYLES: Appearance[] = ['modern', 'retro'];
 const ASCII_MODES = ['donut', 'matrix', 'off'] as const;
 
 type Entry = { path: string; kind: 'directory' } | (ContentFile & { kind: 'file' });
@@ -224,9 +226,10 @@ function globPattern(pattern: string): RegExp {
 const HELP = [
   'Commands · / is the website root (~)',
   'help                         show this guide',
-  'ls [-a/-l] [path]             list files; click a name to open it',
+  'ls [-a/-l] [path]             curated directory; -a shows all raw filenames',
+  'ls posts                     list article titles; click a title to read',
   'cd [path] · pwd               move through directories / print your path',
-  'home · exit                  return to the homepage; keep theme and motion',
+  'home · exit                  return home; keep appearance preferences',
   'cat file [file ...]           read complete text (or piped input)',
   './file.md · contact          open a document from the beginning',
   'more [file] · less [file]     page a complete file or piped text',
@@ -238,6 +241,7 @@ const HELP = [
   'wc [-lwc] [files...]          line / word / UTF-8 byte counts and totals',
   'echo text                    print text literally',
   'theme dark|light|amber        choose terminal colors',
+  'style modern|retro           choose layout; independent of terminal colors',
   'motion on|off                choose animation preference',
   'ascii [donut|matrix|off]      ASCII experiments; matrix is an alias',
   'clear · history              clear the screen / show command history',
@@ -339,14 +343,28 @@ function prepare(words: string[], state: ShellState, fs: FileSystem, receivesInp
       expectArgs(parsed.rest, 0, 1, 'ls [-a/-l] [path]');
       const entry = getEntry(fs, parsed.rest[0] ?? '.', state.cwd, command);
       if (parsed.rest[0]?.endsWith('/') && entry.kind !== 'directory') fail(`ls: ${parsed.rest[0]}: not a directory`);
-      const listing: { entry: Entry; label: string }[] = entry.kind === 'directory'
+      let listing: { entry: Entry; label: string; command?: string }[] = entry.kind === 'directory'
         ? children(fs, entry.path).map((child) => ({ entry: child, label: basename(child.path) + (child.kind === 'directory' ? '/' : '') }))
         : [{ entry, label: basename(entry.path) }];
+      // This is a reading interface, not an exposed build tree. The complete VFS
+      // stays addressable, and -a is the explicit raw view for shell workflows.
+      if (entry.kind === 'directory' && !parsed.flags.has('a')) {
+        if (entry.path === '/') listing = [
+          { entry: fs.get('/posts')!, label: '文章/', command: 'posts' },
+          { entry: fs.get('/about.txt')!, label: '关于' },
+          { entry: fs.get('/contact.txt')!, label: '联系' },
+        ];
+        else if (entry.path === '/posts') listing = posts.map(post => ({
+          entry: fs.get(post.file)!, label: `${post.date}  ${post.title}`,
+        }));
+      }
       if (entry.kind === 'directory' && parsed.flags.has('a')) {
         listing.unshift({ entry, label: '.' }, { entry: fs.get(parent(entry.path))!, label: '..' });
       }
-      return pure(() => listing.map(({ entry: child, label }) => entryLine(child,
-        parsed.flags.has('l') ? `${child.kind === 'directory' ? 'dr-xr-xr-x' : '-r--r--r--'}  ${label}` : label)));
+      return pure(() => listing.map(({ entry: child, label, command }) => ({
+        ...entryLine(child, parsed.flags.has('l') ? `${child.kind === 'directory' ? 'dr-xr-xr-x' : '-r--r--r--'}  ${label}` : label),
+        ...(command ? { command } : {}),
+      })));
     }
     case 'cat': {
       const parsed = positional(args, [], command);
@@ -583,6 +601,12 @@ function prepare(words: string[], state: ShellState, fs: FileSystem, receivesInp
       const motion = args.length ? args[0] === 'on' : state.motion;
       return { kind: 'standalone', run: () => result([{ text: `motion: ${motion ? 'on' : 'off'}`, tone: 'accent' }], { ...state, motion }) };
     }
+    case 'style': {
+      expectArgs(args, 0, 1, 'style modern|retro');
+      if (args.length && !STYLES.includes(args[0] as Appearance)) fail('style: expected modern or retro');
+      const style = (args[0] ?? state.style) as Appearance;
+      return { kind: 'standalone', run: () => result([{ text: `style: ${style}`, tone: 'accent' }], { ...state, style }) };
+    }
     case 'ascii':
       expectArgs(args, 0, 1, 'ascii [donut|matrix|off]');
       if (args.length && !ASCII_MODES.includes(args[0] as typeof ASCII_MODES[number])) fail('ascii: expected donut, matrix, or off');
@@ -694,6 +718,7 @@ export function completeCommand(input: string, state: ShellState): { value: stri
     const args = before.slice(1).map((token) => token.value);
     if (!COMMAND_SET.has(command) || !isVaultUnlocked() && OWNER_COMMANDS.has(command)) return unchanged;
     if (command === 'theme' && !args.length) candidates = THEMES.filter((value) => value.startsWith(prefix));
+    else if (command === 'style' && !args.length) candidates = STYLES.filter((value) => value.startsWith(prefix));
     else if (command === 'motion' && !args.length) candidates = ['off', 'on'].filter((value) => value.startsWith(prefix));
     else if (command === 'ascii' && !args.length) candidates = ASCII_MODES.filter((value) => value.startsWith(prefix));
     else if (command === 'sudo' && args.length < 2) candidates = (args.length ? args[0] === 'make' ? ['coffee'] : [] : ['make']).filter((value) => value.startsWith(prefix));
