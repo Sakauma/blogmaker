@@ -517,9 +517,13 @@ window.addEventListener('pagehide', () => {
 
 function showHome(): void {
   state = { ...state, cwd: '/' };
-  banner(entry('fetch'));
-  const listing = entry('ls');
-  listing.classList.add('directory-grid');
+  // Welcome content is not command history. Only real submissions get an echo.
+  const home = node('section', 'home-view');
+  const intro = node('div', 'home-profile');
+  banner(intro);
+  const listing = node('div', 'home-directory directory-grid');
+  listing.setAttribute('role', 'group');
+  listing.setAttribute('aria-label', '公开目录');
   linesInto(listing, runCommand('ls', state).lines);
   const starters = node('div', 'starter-commands');
   starters.append(node('span', 'muted', '点击目录，或输入命令。'), commandLink('help', 'help'),
@@ -528,7 +532,8 @@ function showHome(): void {
   appearanceHint.append(node('span', 'muted', '风格：输入 '), node('code', '', 'style modern'),
     node('span', 'muted', ' / '), node('code', '', 'style retro'));
   starters.append(appearanceHint);
-  log.append(starters);
+  home.append(intro, listing, starters);
+  log.append(home);
   updateUI();
 }
 const initialRoute = routeFor(location.pathname) ?? routeFor('/404.html');

@@ -405,13 +405,15 @@ test('桌面首屏为深色纯终端，常驻命令行、滚动日志与按钮�
 
 test('首页保留 ASCII fetch、当天信息和三个入口，首屏目录与真实 ls 一致', async ({ page }) => {
   await visit(page);
+  await expect(form(page)).toHaveCount(1);
+  await expect(log(page).locator('.echo-line, .entry')).toHaveCount(0);
   await expect(log(page).locator('.ascii-logo')).toHaveCount(1);
   await expect(log(page).locator('.ascii-logo')).toHaveText(/[_/\\|]/);
   const daily = log(page).locator('[data-fetch-field="today"]');
   await expect(daily).toHaveText(/today\d{4}-\d{2}-\d{2} · 星期[日一二三四五六]/);
   await expect(log(page).locator('[data-fetch-field="year"]')).toContainText(/第 \d+ \/ 36[56] 天/);
   await expect(log(page).locator('[data-fetch-field="progress"]')).toContainText(/\[[#-]{12}\] \d+\.\d%/);
-  const initialListing = log(page).locator('.entry[data-command-line="ls"] > .output');
+  const initialListing = log(page).getByRole('group', { name: '公开目录', exact: true });
   await expect(initialListing).toHaveCount(1);
   const initialText = await initialListing.innerText();
   expect(await initialListing.locator('button').allTextContents()).toEqual(['文章/', '关于', '联系']);
@@ -423,6 +425,7 @@ test('首页保留 ASCII fetch、当天信息和三个入口，首屏目录与�
   await expect(screen(page)).not.toContainText(/mindspace|motion-design|visitor@orbit|orbit\.sh|a corner of the internet/i);
   await runCommand(page, 'clear');
   await runCommand(page, 'ls');
+  await expect(log(page).locator('.echo-line')).toHaveCount(1);
   await expect(output(page)).toHaveText(initialText, { useInnerText: true });
 });
 
@@ -1474,7 +1477,8 @@ for (const action of ['home', 'exit', 'Control+d'] as const) {
     await expect.poll(() => new URL(page.url()).pathname).toBe('/');
     await expect(page.locator('#prompt-path')).toHaveText('~');
     await expect(log(page).locator('.ascii-logo')).toHaveCount(1);
-    const listing = log(page).locator('.entry[data-command-line="ls"] > .output');
+    await expect(log(page).locator('.echo-line, .entry')).toHaveCount(0);
+    const listing = log(page).getByRole('group', { name: '公开目录', exact: true });
     expect(await listing.locator('button').allTextContents()).toEqual(['文章/', '关于', '联系']);
     await expectTheme(page, 'amber');
     await expectInputUsable(page);
