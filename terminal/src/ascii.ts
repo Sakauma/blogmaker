@@ -93,7 +93,7 @@ export class AsciiAnimation {
     this.frame = requestAnimationFrame(this.tick);
   };
   private draw(): void {
-    const columns = this.element.clientWidth < 450 ? 36 : 68;
+    const columns = Math.min(68, Math.max(16, Math.floor(this.element.clientWidth / 8)));
     this.surface.textContent = asciiFrame(this.mode, this.phase, columns, columns < 40 ? 14 : 20);
   }
   setMotion(enabled: boolean): void { this.motion = enabled; this.sync(); }

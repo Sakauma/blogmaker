@@ -173,11 +173,9 @@ async function startAnimation(page: Page, mode: AsciiMode): Promise<Locator> {
 }
 
 async function prepareScreenshot(page: Page, theme: Theme = 'dark'): Promise<void> {
-  // Seed only visual-test contexts. Behavior tests retain fresh storage and use
-  // actual commands to exercise persistence and system reduced-motion settings.
+  await page.emulateMedia({ reducedMotion: 'reduce' });
   await page.addInitScript((selectedTheme: Theme) => {
     localStorage.setItem('sakauma:cli:theme', selectedTheme);
-    localStorage.setItem('sakauma:cli:motion', 'off');
   }, theme);
   await visit(page);
   await expectMotion(page, false);
@@ -801,14 +799,14 @@ test('Tab 补全命令、目录与文件，Shift+Tab 可以离开输入行', asy
 
 test('Tab 有多个候选时保留输入并在终端行内显示候选', async ({ page }) => {
   await visit(page);
-  await input(page).fill('motion o');
+  await input(page).fill('theme ');
   await input(page).press('Tab');
-  await expect(input(page)).toHaveValue('motion o');
+  await expect(input(page)).toHaveValue('theme ');
   await expect(input(page)).toBeFocused();
   const hints = screen(page).getByRole('status');
   await expect(hints).toBeVisible();
-  await expect(hints).toContainText('on');
-  await expect(hints).toContainText('off');
+  await expect(hints).toContainText('dark');
+  await expect(hints).toContainText('light');
   await expect(page.getByRole('dialog')).toHaveCount(0);
 });
 
@@ -1024,18 +1022,21 @@ test('fetch与neofetch输出当天快照，today支持文本筛选', async ({ pa
   await expect(output(page)).toHaveText('5');
 });
 
-test('motion off / on 更新根状态与 CLI 存储，刷新后保留选择', async ({ page }) => {
+test('motion 开关、命令与提示已移除，旧偏好不干预系统设置', async ({ page }) => {
   await page.emulateMedia({ reducedMotion: 'no-preference' });
+  await page.addInitScript(() => localStorage.setItem('sakauma:cli:motion', 'off'));
   await visit(page);
   await expectMotion(page, true);
-  for (const mode of ['off', 'on'] as const) {
-    await runCommand(page, `motion ${mode}`);
-    await expectMotion(page, mode === 'on');
-    expect(await page.evaluate(() => localStorage.getItem('sakauma:cli:motion'))).toBe(mode);
-    await page.reload();
-    await waitForPage(page);
-    await expectMotion(page, mode === 'on');
-  }
+  await expect(page.locator('#motion-command, [data-command^="motion"]')).toHaveCount(0);
+  await expect(screen(page)).not.toContainText('motion:');
+  await runCommand(page, 'help');
+  await expect(output(page)).not.toContainText('motion');
+  await runCommand(page, 'motion off');
+  await expect(output(page)).toHaveText('motion: command not found');
+  await expectMotion(page, true);
+  await page.reload();
+  await waitForPage(page);
+  await expectMotion(page, true);
 });
 
 test('默认遵从 reduced-motion，两种 ASCII 请求都产生不运行的静态帧', async ({ page }) => {
@@ -1052,15 +1053,13 @@ test('默认遵从 reduced-motion，两种 ASCII 请求都产生不运行的静�
   await expect(page.locator('canvas, img')).toHaveCount(0);
 });
 
-test('没有手动偏好时跟随系统动效变化，显式 motion off 后保留选择', async ({ page }) => {
+test('动效实时跟随系统设置，刷新后按系统状态初始化', async ({ page }) => {
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await visit(page);
   await expectMotion(page, false);
   await page.emulateMedia({ reducedMotion: 'no-preference' });
   await expectMotion(page, true);
-  await runCommand(page, 'motion off');
   await page.emulateMedia({ reducedMotion: 'reduce' });
-  await page.emulateMedia({ reducedMotion: 'no-preference' });
   await expectMotion(page, false);
   await page.reload();
   await waitForPage(page);
@@ -1102,15 +1101,18 @@ for (const key of ['Control+c', 'Escape'] as const) {
   });
 }
 
-test('motion off 可停止正在变化的字符动画，之后的 ASCII 也保持静态', async ({ page }) => {
+test('系统减少动效可暂停字符动画，恢复后继续运行', async ({ page }) => {
   await page.emulateMedia({ reducedMotion: 'no-preference' });
   await visit(page);
   const surface = await startAnimation(page, 'matrix');
   const frame = surface.locator(':scope > pre');
-  await runCommand(page, 'motion off');
+  await page.emulateMedia({ reducedMotion: 'reduce' });
   await expectMotion(page, false);
   await expect(surface).toHaveAttribute('data-running', 'false');
   await expectStaticFrame(frame);
+  await page.emulateMedia({ reducedMotion: 'no-preference' });
+  await expect(surface).toHaveAttribute('data-running', 'true');
+  await page.emulateMedia({ reducedMotion: 'reduce' });
   await runCommand(page, 'ascii donut');
   await expect(animation(page)).toHaveAttribute('data-running', 'false');
   await expectStaticFrame(asciiPre(page));

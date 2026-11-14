@@ -31,8 +31,14 @@ test('first visit defaults to retro and respects system motion', () => {
 
 test('saved layout and colors are independent before first paint', () => {
   for (const style of ['modern', 'retro']) for (const theme of ['dark', 'light', 'amber']) {
-    assert.deepEqual(initialize({ 'sakauma:cli:style': style, 'sakauma:cli:theme': theme, 'sakauma:cli:motion': 'off' }),
-      { style, theme, motion: 'off' });
+    assert.deepEqual(initialize({ 'sakauma:cli:style': style, 'sakauma:cli:theme': theme }),
+      { style, theme, motion: 'on' });
+  }
+});
+
+test('system motion takes precedence over retired motion preferences', () => {
+  for (const saved of ['on', 'off']) for (const reduced of [true, false]) {
+    assert.equal(initialize({ 'sakauma:cli:motion': saved }, { reduced }).motion, reduced ? 'off' : 'on');
   }
 });
 

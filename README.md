@@ -51,7 +51,7 @@ ascii donut
 
 首页为 ASCII `fetch` 与命令输入行。`fetch`（别名 `neofetch`、`banner`）显示个人信息；`fetch` 与 `today` 均显示访客本地日期、时间和年度进度。
 
-默认复古风格，`style` 切换布局，`theme` 切换配色，`motion` 切换动效；偏好保存到本地。
+默认复古风格，`style` 切换布局，`theme` 切换配色；偏好保存到本地。
 
 ```text
 style modern
@@ -59,12 +59,11 @@ style retro
 theme dark
 theme light
 theme amber
-motion off
 fetch
 today
 ```
 
-字体为自托管 **Maple Mono**（英文和俄文）及系统中文字体。许可见 `/FONT-LICENSE.txt`，来源与校验值见 `terminal/src/fonts/README.md`。
+字体为自托管 **IBM VGA 8×16**（英文和俄文）及系统宋体。许可见 `/FONT-LICENSE.txt`，来源与校验值见 `terminal/src/fonts/README.md`。
 
 直接输入文档路径、`contact` 或 `about` 清屏打开文档；`cat` 将正文追加到会话。`home`、`exit` 或空输入时的 Ctrl+D 返回首页。
 
@@ -250,4 +249,4 @@ npm run deploy:local
 - `static/`：原静态资源与后续文章图片，按原路径发布。
 - `dist/`：完整发布产物，Git 忽略，直接修改会在下次构建时被覆盖。
 
-YAML 使用 `yaml`，Markdown 使用 `marked`，HTML 转文本使用 `parse5`，以正确处理实体、DOM 层级、诗歌换行和缩进。TypeScript/Vite 编译交互终端，Maple Mono 字体随站点本地发布。依赖版本记录在 `package-lock.json`。
+YAML 使用 `yaml`，Markdown 使用 `marked`，HTML 转文本使用 `parse5`，以正确处理实体、DOM 层级、诗歌换行和缩进。TypeScript/Vite 编译交互终端，IBM VGA 字体随站点本地发布。依赖版本记录在 `package-lock.json`。

@@ -10,7 +10,6 @@ import { dailyInfo } from './daily';
 
 const root = document.documentElement;
 const app = document.querySelector<HTMLDivElement>('#app')!;
-const load = (key: string): string | null => { try { return localStorage.getItem(`sakauma:cli:${key}`); } catch { return null; } };
 const save = (key: string, value: string): void => { try { localStorage.setItem(`sakauma:cli:${key}`, value); } catch { /* A terminal session does not require storage. */ } };
 const media = matchMedia('(prefers-reduced-motion: reduce)');
 let state: ShellState = {
@@ -54,7 +53,7 @@ app.innerHTML = `
       </div>
       <button id="jump-latest" type="button" aria-label="回到输入行" hidden>↓</button>
     </div>
-    <footer class="status-line"><span class="session-label">0:shell<span aria-hidden="true">*</span></span><span class="status-directory">~</span><span class="status-right"><button type="button" id="vault-command" data-command="unlock" aria-label="解锁私密资料">unlock</button><span class="status-divider">│</span><button type="button" id="theme-command" data-command="theme light" aria-label="切换终端主题">dark</button><span class="status-divider">│</span><button type="button" id="motion-command" data-command="motion off" aria-label="切换字符动效">motion:on</button><span class="encoding">UTF-8</span></span></footer>
+    <footer class="status-line"><span class="session-label">0:shell<span aria-hidden="true">*</span></span><span class="status-directory">~</span><span class="status-right"><button type="button" id="vault-command" data-command="unlock" aria-label="解锁私密资料">unlock</button><span class="status-divider">│</span><button type="button" id="theme-command" data-command="theme light" aria-label="切换终端主题">dark</button><span class="encoding">UTF-8</span></span></footer>
   </main>`;
 
 const log = document.querySelector<HTMLElement>('#terminal-log')!;
@@ -155,9 +154,6 @@ function updateUI(): void {
   const theme = document.querySelector<HTMLButtonElement>('#theme-command')!;
   theme.textContent = state.theme;
   theme.dataset.command = `theme ${state.theme === 'dark' ? 'light' : state.theme === 'light' ? 'amber' : 'dark'}`;
-  const motion = document.querySelector<HTMLButtonElement>('#motion-command')!;
-  motion.textContent = `motion:${state.motion ? 'on' : 'off'}`;
-  motion.dataset.command = `motion ${state.motion ? 'off' : 'on'}`;
   document.querySelector<HTMLMetaElement>('meta[name="theme-color"]')!.content = state.theme === 'light' ? '#f5f3ee' : state.theme === 'amber' ? '#17130e' : '#111314';
 }
 function resizeInput(): void {
@@ -298,7 +294,7 @@ function execute(raw: string, options: { reveal?: 'prompt' | 'start' | 'none'; a
   if (!command) { focusInput(); return; }
   closeUnlock();
   stopPager();
-  const isSetting = /^(motion|theme|style)(\s|$)/.test(command);
+  const isSetting = /^(theme|style)(\s|$)/.test(command);
   if (!isSetting) stopAnimation();
   if (commands.at(-1) !== command) commands.push(command);
   if (commands.length > 100) commands.shift();
@@ -312,8 +308,6 @@ function execute(raw: string, options: { reveal?: 'prompt' | 'start' | 'none'; a
   const output = entry(command);
   if (result.state.theme !== state.theme) save('theme', result.state.theme);
   if (result.state.style !== state.style) save('style', result.state.style);
-  // Persist an explicit choice even if it equals the system's current setting.
-  if (/^motion\s+(on|off)\s*$/.test(command) && !result.lines.some(line => line.tone === 'error')) save('motion', result.state.motion ? 'on' : 'off');
   state = result.state;
   animation?.setMotion(state.motion);
   updateUI();
@@ -496,7 +490,6 @@ window.visualViewport?.addEventListener('resize', viewportChanged, { passive: tr
 window.visualViewport?.addEventListener('scroll', updateJump, { passive: true });
 jump.addEventListener('click', () => { focusInput(); scrollToPrompt(); });
 media.addEventListener('change', (event) => {
-  if (load('motion') !== null) return;
   state = { ...state, motion: !event.matches };
   animation?.setMotion(state.motion);
   updateUI();

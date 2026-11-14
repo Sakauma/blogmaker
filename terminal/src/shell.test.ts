@@ -300,7 +300,7 @@ test('empty pipeline stages and double pipes are explicit syntax errors', () => 
 test('state-changing commands are rejected anywhere in a pipeline atomically', () => {
   const state: ShellState = { cwd: '/posts', theme: 'dark', style: 'modern', motion: true };
   const snapshot = { ...state };
-  for (const input of ['theme light | wc', 'echo x | motion off', 'cd / | pwd', 'echo x | theme amber | wc']) {
+  for (const input of ['theme light | wc', 'echo x | style retro', 'cd / | pwd', 'echo x | theme amber | wc']) {
     expectError(input, /only text-producing commands/, state);
     assert.deepEqual(state, snapshot);
   }
@@ -383,15 +383,12 @@ test('theme changes return a new state and no UI effect', () => {
   expectError('theme light extra', /usage/);
 });
 
-test('motion updates preserve cwd and theme, without mutating the input', () => {
+test('motion is absent from commands, help and completion', () => {
   const state: ShellState = { cwd: '/tags', theme: 'amber', style: 'modern', motion: true };
-  const result = run('motion off', state);
-  assert.deepEqual(result.state, { cwd: '/tags', theme: 'amber', style: 'modern', motion: false });
-  assert.deepEqual(texts(result), ['motion: off']);
-  assert.equal(result.effect, undefined);
-  assert.equal(state.motion, true);
-  assert.equal(run('motion on', result.state).state.motion, true);
-  expectError('motion maybe', /expected on or off/);
+  for (const command of ['motion', 'motion off', 'motion on']) expectError(command, /^motion: command not found$/, state);
+  assert.doesNotMatch(texts(run('help')).join('\n'), /\bmotion\b/);
+  assert.deepEqual(completeCommand('motion o', state).candidates, []);
+  assert.ok(!completeCommand('mo', state).candidates.includes('motion'));
 });
 
 test('style changes are independent of colors, cwd and motion and validate atomically', () => {
@@ -410,7 +407,7 @@ test('style changes are independent of colors, cwd and motion and validate atomi
   expectError('style retro | wc', /pipeline:/, state);
   expectError('echo x | style retro', /pipeline:/, state);
   const retro = { ...state, style: 'retro' as const };
-  for (const command of ['theme light', 'motion on', 'home', 'exit', 'cd /']) assert.equal(run(command, retro).state.style, 'retro');
+  for (const command of ['theme light', 'home', 'exit', 'cd /']) assert.equal(run(command, retro).state.style, 'retro');
   assert.equal(completeCommand('style r', state).value, 'style retro ');
   assert.equal(completeCommand('style m', state).value, 'style modern ');
 });
@@ -557,7 +554,7 @@ test('completion preserves quotes and whitespace around the token', () => {
 
 test('completion expands parameter values and flags', () => {
   assert.equal(completeCommand('theme l', initial).value, 'theme light ');
-  assert.equal(completeCommand('motion of', initial).value, 'motion off ');
+  assert.equal(completeCommand('style re', initial).value, 'style retro ');
   assert.equal(completeCommand('ascii d', initial).value, 'ascii donut ');
   assert.equal(completeCommand('ls -a', initial).value, 'ls -a');
   assert.deepEqual(completeCommand('ls -a', initial).candidates, ['-a', '-al']);
@@ -836,7 +833,7 @@ test('pagers are allowed only as the last stage and all other display effects re
   for (const input of ['more /contact.txt | wc', 'cat /contact.txt | less | head', 'echo x | more | less']) {
     expectError(input, /more\/less must be the final command/, state);
   }
-  for (const input of ['theme amber | less', 'cd / | more', 'home | less', 'exit | more', 'clear | less', 'history | more', 'ascii donut | less', 'motion on | less']) {
+  for (const input of ['theme amber | less', 'cd / | more', 'home | less', 'exit | more', 'clear | less', 'history | more', 'ascii donut | less', 'style retro | less']) {
     expectError(input, /only text-producing commands/, state);
   }
 });

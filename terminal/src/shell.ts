@@ -24,7 +24,7 @@ const INPUT_LIMIT = 4096;
 const HEAD_LIMIT = 1000;
 const COMMANDS = [
   'about', 'ascii', 'banner', 'cat', 'cd', 'clear', 'coffee', 'contact', 'date', 'echo', 'exit',
-  'find', 'grep', 'head', 'help', 'history', 'home', 'less', 'ls', 'matrix', 'more', 'motion', 'neofetch',
+  'find', 'grep', 'head', 'help', 'history', 'home', 'less', 'ls', 'matrix', 'more', 'neofetch',
   'notes', 'open', 'posts', 'projects', 'pwd', 'readme', 'search', 'sudo', 'tags', 'tail', 'categories', 'archives', 'theme', 'tree', 'wc', 'whoami',
   'unlock', 'lock', 'private', 'download', 'style', 'fetch', 'today',
 ] as const;
@@ -242,7 +242,6 @@ const HELP = [
   'echo text                    text',
   'theme dark|light|amber        colors',
   'style modern|retro           layout',
-  'motion on|off                motion',
   'ascii [donut|matrix|off]      animation',
   'clear · history              clear / history',
   'fetch · neofetch · banner     profile',
@@ -591,12 +590,6 @@ function prepare(words: string[], state: ShellState, fs: FileSystem, receivesInp
       const theme = (args[0] ?? state.theme) as Theme;
       return { kind: 'standalone', run: () => result([{ text: `theme: ${theme}`, tone: 'accent' }], { ...state, theme }) };
     }
-    case 'motion': {
-      expectArgs(args, 0, 1, 'motion on|off');
-      if (args.length && args[0] !== 'on' && args[0] !== 'off') fail('motion: expected on or off');
-      const motion = args.length ? args[0] === 'on' : state.motion;
-      return { kind: 'standalone', run: () => result([{ text: `motion: ${motion ? 'on' : 'off'}`, tone: 'accent' }], { ...state, motion }) };
-    }
     case 'style': {
       expectArgs(args, 0, 1, 'style modern|retro');
       if (args.length && !STYLES.includes(args[0] as Appearance)) fail('style: expected modern or retro');
@@ -719,7 +712,6 @@ export function completeCommand(input: string, state: ShellState): { value: stri
     if (!COMMAND_SET.has(command) || !isVaultUnlocked() && OWNER_COMMANDS.has(command)) return unchanged;
     if (command === 'theme' && !args.length) candidates = THEMES.filter((value) => value.startsWith(prefix));
     else if (command === 'style' && !args.length) candidates = STYLES.filter((value) => value.startsWith(prefix));
-    else if (command === 'motion' && !args.length) candidates = ['off', 'on'].filter((value) => value.startsWith(prefix));
     else if (command === 'ascii' && !args.length) candidates = ASCII_MODES.filter((value) => value.startsWith(prefix));
     else if (command === 'sudo' && args.length < 2) candidates = (args.length ? args[0] === 'make' ? ['coffee'] : [] : ['make']).filter((value) => value.startsWith(prefix));
     else if (['head', 'tail'].includes(command) && !args.includes('--') && args[args.length - 1] === '-n') {
