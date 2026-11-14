@@ -8,7 +8,10 @@ const bootstrap = html.match(/<script>([\s\S]*?)<\/script>/)?.[1];
 assert.ok(bootstrap, 'appearance preferences initialize before the app loads');
 
 function initialize(preferences = {}, { reduced = false, blocked = false } = {}) {
-  const dataset = { theme: 'dark', style: 'modern' };
+  const dataset = {
+    theme: html.match(/<html[^>]+data-theme="([^"]+)"/)[1],
+    style: html.match(/<html[^>]+data-style="([^"]+)"/)[1],
+  };
   runInNewContext(bootstrap, {
     document: { documentElement: { dataset } },
     localStorage: { getItem(key) {
@@ -20,10 +23,10 @@ function initialize(preferences = {}, { reduced = false, blocked = false } = {})
   return dataset;
 }
 
-test('first visit defaults to modern and respects system motion', () => {
-  assert.match(html, /<html[^>]+data-style="modern"/);
-  assert.deepEqual(initialize(), { theme: 'dark', style: 'modern', motion: 'on' });
-  assert.deepEqual(initialize({}, { reduced: true }), { theme: 'dark', style: 'modern', motion: 'off' });
+test('first visit defaults to retro and respects system motion', () => {
+  assert.match(html, /<html[^>]+data-style="retro"/);
+  assert.deepEqual(initialize(), { theme: 'dark', style: 'retro', motion: 'on' });
+  assert.deepEqual(initialize({}, { reduced: true }), { theme: 'dark', style: 'retro', motion: 'off' });
 });
 
 test('saved layout and colors are independent before first paint', () => {
@@ -35,10 +38,10 @@ test('saved layout and colors are independent before first paint', () => {
 
 test('unknown saved preferences fall back without becoming DOM attributes', () => {
   assert.deepEqual(initialize({ 'sakauma:cli:style': '<invalid>', 'sakauma:cli:theme': 'neon' }),
-    { theme: 'dark', style: 'modern', motion: 'on' });
+    { theme: 'dark', style: 'retro', motion: 'on' });
 });
 
 test('disabled storage does not break startup or reduced-motion preference', () => {
   assert.deepEqual(initialize({}, { reduced: true, blocked: true }),
-    { theme: 'dark', style: 'modern', motion: 'off' });
+    { theme: 'dark', style: 'retro', motion: 'off' });
 });

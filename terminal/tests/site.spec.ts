@@ -395,6 +395,8 @@ test('桌面首屏为深色纯终端，常驻命令行、滚动日志与按钮�
   await page.setViewportSize(DESKTOP);
   await visit(page);
   await expectTheme(page, 'dark');
+  await expect(page.locator('html')).toHaveAttribute('data-style', 'retro');
+  await expect(page.locator('#style-status')).toHaveText('style:retro');
   await expectPureTerminal(page);
   await expect(page.locator('#prompt-path')).toHaveText('~');
   await expect(input(page)).toBeFocused();

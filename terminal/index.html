@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="zh-CN" data-theme="dark" data-style="modern">
+<html lang="zh-CN" data-theme="dark" data-style="retro">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, interactive-widget=resizes-content" />
@@ -15,7 +15,7 @@
         const saved = localStorage.getItem('sakauma:cli:theme');
         document.documentElement.dataset.theme = ['dark', 'light', 'amber'].includes(saved) ? saved : 'dark';
         const style = localStorage.getItem('sakauma:cli:style');
-        document.documentElement.dataset.style = ['modern', 'retro'].includes(style) ? style : 'modern';
+        document.documentElement.dataset.style = ['modern', 'retro'].includes(style) ? style : 'retro';
         const motion = localStorage.getItem('sakauma:cli:motion');
         document.documentElement.dataset.motion = motion === 'off' || (motion !== 'on' && matchMedia('(prefers-reduced-motion: reduce)').matches) ? 'off' : 'on';
       } catch {

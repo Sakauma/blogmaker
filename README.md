@@ -66,7 +66,7 @@ fetch
 today
 ```
 
-默认使用现代布局；本地偏好键为 `sakauma:cli:style`。禁用浏览器存储时仍能在本次会话中切换。字体改为自托管 **Maple Mono**（英文和俄文），中文使用系统中文字体，避免强制下载大型字库。字体随站点发布，无第三方字体 CDN 请求；许可见 `/FONT-LICENSE.txt`，来源与校验值见 `terminal/src/fonts/README.md`。
+默认使用复古布局（`retro`）；本地偏好键为 `sakauma:cli:style`。首次访问、未保存偏好或保存值无效时使用复古，已手动保存的现代 / 复古选择继续保留。禁用浏览器存储时仍能在本次会话中切换。字体改为自托管 **Maple Mono**（英文和俄文），中文使用系统中文字体，避免强制下载大型字库。字体随站点发布，无第三方字体 CDN 请求；许可见 `/FONT-LICENSE.txt`，来源与校验值见 `terminal/src/fonts/README.md`。
 
 文档本身也可以作为命令：直接输入 `/posts/001-2026-01-21.md`、`./about.txt`、`contact` 或 `about`，会清屏并从开头打开。`cat` 保留此前会话，继续使用整页自然滚动；`home`、`exit` 和空输入时的 Ctrl+D 返回首页与根目录，保留历史命令和主题偏好。
 

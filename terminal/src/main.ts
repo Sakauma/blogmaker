@@ -16,7 +16,7 @@ const media = matchMedia('(prefers-reduced-motion: reduce)');
 let state: ShellState = {
   cwd: '/',
   theme: (['dark', 'light', 'amber'].includes(root.dataset.theme ?? '') ? root.dataset.theme : 'dark') as Theme,
-  style: (root.dataset.style === 'retro' ? 'retro' : 'modern') as Appearance,
+  style: (root.dataset.style === 'modern' ? 'modern' : 'retro') as Appearance,
   motion: root.dataset.motion !== 'off',
 };
 const commands: string[] = [];
@@ -31,8 +31,8 @@ let pager: Pager | null = null;
 app.innerHTML = `
   <main id="terminal-screen" aria-label="Sakauma 交互终端">
     <header class="terminal-title">
-      <span class="title-identity"><span class="title-mark">&gt;_</span> sakauma<span class="title-separator"> / </span><span class="title-context muted">journal</span></span>
-      <span id="style-status" class="muted" title="输入 style modern 或 style retro 切换">style:modern</span>
+      <span class="title-identity"><span class="title-mark">&gt;_</span> sakauma<span class="title-separator"> / </span><span class="title-context muted">${state.style === 'retro' ? 'dev/tty1' : 'journal'}</span></span>
+      <span id="style-status" class="muted" title="输入 style modern 或 style retro 切换">style:${state.style}</span>
     </header>
     <div id="scrollback" role="region" aria-label="终端会话内容">
       <div id="terminal-log" role="log" aria-label="终端输出" aria-live="polite" aria-relevant="additions"></div>
