@@ -4,6 +4,7 @@ import { clearPrivateFiles, isVaultUnlocked, manifest, profile, files, posts, ro
 import type { ContentFile, VaultFile } from './content';
 import { basename, directoryNames, fileLines, fileText, legacySourceFilenames, originalTextRuns, preformattedPoems, quote, sortedPostNames, sortedProjectNames, sourcePosts } from '../tests/content-fixtures';
 import { completeCommand, passwordCommandInput, runCommand } from './shell';
+import { dailyInfo } from './daily';
 import type { ShellResult, ShellState } from './shell';
 
 // Synthetic data only: no real vault, password or private source is read by these tests.
@@ -417,7 +418,7 @@ test('style changes are independent of colors, cwd and motion and validate atomi
 test('screen commands expose the exact effect contract', () => {
   const commands = [
     ['clear', { type: 'clear' }], ['history', { type: 'history' }],
-    ['banner', { type: 'banner' }], ['neofetch', { type: 'banner' }],
+    ['banner', { type: 'banner' }], ['neofetch', { type: 'banner' }], ['fetch', { type: 'banner' }],
     ['ascii', { type: 'ascii', mode: 'donut' }], ['ascii donut', { type: 'ascii', mode: 'donut' }],
     ['ascii matrix', { type: 'ascii', mode: 'matrix' }], ['matrix', { type: 'ascii', mode: 'matrix' }],
     ['ascii off', { type: 'ascii', mode: 'off' }],
@@ -429,6 +430,58 @@ test('screen commands expose the exact effect contract', () => {
   expectError('ascii unknown', /expected donut, matrix, or off/);
   expectError('clear later', /usage/);
   expectError('history 2', /usage/);
+  expectError('fetch extra', /usage/);
+  expectError('fetch | wc', /pipeline:/);
+  assert.equal(completeCommand('fet', initial).value, 'fetch ');
+});
+
+const dailyValues = (iso: string, zone: string) => Object.fromEntries(dailyInfo(new Date(iso), zone).map(field => [field.label, field.value]));
+
+test('daily snapshot uses the visitor timezone across local midnight', () => {
+  const instant = '2026-11-14T16:05:06Z';
+  const shanghai = dailyValues(instant, 'Asia/Shanghai');
+  const utc = dailyValues(instant, 'UTC');
+  assert.equal(shanghai.today, '2026-11-15 · 星期日');
+  assert.equal(shanghai.time, '00:05:06');
+  assert.equal(shanghai.zone, 'Asia/Shanghai (UTC+08:00)');
+  assert.equal(shanghai.year, '第 319 / 365 天 · 剩余 46 天');
+  assert.equal(utc.today, '2026-11-14 · 星期六');
+  assert.equal(utc.time, '16:05:06');
+});
+
+test('daily snapshot handles leap years and resets at New Year', () => {
+  assert.equal(dailyValues('2028-02-29T12:00:00Z', 'UTC').year, '第 60 / 366 天 · 剩余 306 天');
+  assert.equal(dailyValues('2027-03-01T12:00:00Z', 'UTC').year, '第 60 / 365 天 · 剩余 305 天');
+  const last = dailyValues('2026-12-31T23:59:59Z', 'UTC');
+  assert.equal(last.year, '第 365 / 365 天 · 剩余 0 天');
+  assert.equal(last.progress, '[###########-] 99.9%');
+  const first = dailyValues('2027-01-01T00:00:00Z', 'UTC');
+  assert.equal(first.year, '第 1 / 365 天 · 剩余 364 天');
+  assert.equal(first.progress, '[------------] 0.0%');
+  assert.equal(first.time, '00:00:00');
+});
+
+test('daily calendar day and timezone offset remain correct through DST changes', () => {
+  const before = dailyValues('2026-03-08T06:59:59Z', 'America/New_York');
+  const after = dailyValues('2026-03-08T07:00:00Z', 'America/New_York');
+  assert.equal(before.year, after.year);
+  assert.equal(after.year, '第 67 / 365 天 · 剩余 298 天');
+  assert.equal(before.time, '01:59:59');
+  assert.equal(after.time, '03:00:00');
+  assert.match(before.zone, /UTC-05:00/);
+  assert.match(after.zone, /UTC-04:00/);
+});
+
+test('today is plain text, can be piped, and does not change shell state', () => {
+  const result = run('today');
+  assert.equal(result.lines.length, 5);
+  assert.match(result.lines[0].text, /^today\s+\d{4}-\d{2}-\d{2} · 星期/);
+  assert.deepEqual(result.state, initial);
+  assert.equal(result.effect, undefined);
+  assert.equal(result.file, undefined);
+  assert.deepEqual(texts(run('today | wc -l')), ['5']);
+  assert.equal(completeCommand('tod', initial).value, 'today ');
+  expectError('today extra', /usage/);
 });
 
 test('identity, ISO date, coffee aliases and content shortcuts are available', () => {

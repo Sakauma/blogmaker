@@ -403,10 +403,14 @@ test('桌面首屏为深色纯终端，常驻命令行、滚动日志与按钮�
   expect(pageErrors).toEqual([]);
 });
 
-test('首页精简为个人简介和三个入口，首屏根目录与真实 ls 一致', async ({ page }) => {
+test('首页保留 ASCII fetch、当天信息和三个入口，首屏目录与真实 ls 一致', async ({ page }) => {
   await visit(page);
-  await expect(log(page).getByRole('heading', { level: 1 })).toHaveText(profile.brand);
-  await expect(log(page).locator('.ascii-logo')).toHaveCount(0);
+  await expect(log(page).locator('.ascii-logo')).toHaveCount(1);
+  await expect(log(page).locator('.ascii-logo')).toHaveText(/[_/\\|]/);
+  const daily = log(page).locator('[data-fetch-field="today"]');
+  await expect(daily).toHaveText(/today\d{4}-\d{2}-\d{2} · 星期[日一二三四五六]/);
+  await expect(log(page).locator('[data-fetch-field="year"]')).toContainText(/第 \d+ \/ 36[56] 天/);
+  await expect(log(page).locator('[data-fetch-field="progress"]')).toContainText(/\[[#-]{12}\] \d+\.\d%/);
   const initialListing = log(page).locator('.entry[data-command-line="ls"] > .output');
   await expect(initialListing).toHaveCount(1);
   const initialText = await initialListing.innerText();
@@ -942,20 +946,22 @@ test('theme light / amber / dark 改变实际颜色，并通过 CLI 存储键跨
   }
 });
 
-test('风格按钮保留草稿与正文，命令和刷新保留独立的配色及外观', async ({ page }) => {
+test('风格仅通过命令切换，保留正文、配色和刷新偏好', async ({ page }) => {
   await visit(page);
+  await expect(page.locator('[data-style-choice], .style-switch')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: '复古', exact: true })).toHaveCount(0);
+  await expect(page.locator('.style-hint')).toContainText('style modern / style retro');
   await runCommand(page, 'theme light');
-  await runCommand(page, `cat ${quote(russianPost.file)}`);
+  await runCommand(page, 'clear');
+  await runCommand(page, 'cat ' + quote(russianPost.file));
   const content = await output(page).textContent();
   const url = page.url();
-  await input(page).fill('echo 尚未提交');
-  await page.getByRole('button', { name: '复古', exact: true }).click();
+  await runCommand(page, 'style retro');
   await expect(page.locator('html')).toHaveAttribute('data-style', 'retro');
+  await expect(page.locator('#style-status')).toHaveText('style:retro');
   await expectTheme(page, 'light');
-  await expect(input(page)).toHaveValue('echo 尚未提交');
-  expect(await output(page).textContent()).toBe(content);
+  expect(await log(page).locator('.entry > .output').first().textContent()).toBe(content);
   expect(page.url()).toBe(url);
-  await expect(page.getByRole('button', { name: '复古', exact: true })).toHaveAttribute('aria-pressed', 'true');
   expect(await page.evaluate(() => localStorage.getItem('sakauma:cli:style'))).toBe('retro');
   await page.reload();
   await waitForPage(page);
@@ -963,47 +969,37 @@ test('风格按钮保留草稿与正文，命令和刷新保留独立的配色�
   await expectTheme(page, 'light');
   await expectFile(output(page), russianPost.file);
   await runCommand(page, 'style modern');
-  await expect(page.locator('html')).toHaveAttribute('data-style', 'modern');
   await page.reload();
   await waitForPage(page);
   await expect(page.locator('html')).toHaveAttribute('data-style', 'modern');
   await expectTheme(page, 'light');
 });
 
-test('两种风格在320px保留可操作按钮，分页切换不退出也不丢原文', async ({ page }) => {
+test('两种风格在320px使用命令切换后仍可阅读和输入', async ({ page }) => {
   await page.setViewportSize({ width: 320, height: 740 });
   await visit(page);
-  for (const name of ['复古', '现代'] as const) {
-    await page.getByRole('button', { name, exact: true }).click();
+  for (const style of ['retro', 'modern'] as const) {
+    await runCommand(page, 'style ' + style);
+    await runCommand(page, 'home');
+    await expect(page.locator('html')).toHaveAttribute('data-style', style);
     await expectNoHorizontalOverflow(page);
-    await expectInsideViewport(page, page.getByRole('button', { name, exact: true }));
-    await expectInputUsable(page);
+    await expect(input(page)).toBeEditable();
+    await runCommand(page, 'today');
+    await expect(output(page).locator('.output-line')).toHaveCount(5);
   }
-  const expected = visibleFileLines(longestPost.file);
-  await startPager(page, `less ${quote(longestPost.file)}`, 'less');
-  await pagerNext(page).click();
-  const before = await expectPagerSlice(page, expected);
-  await page.getByRole('button', { name: '复古', exact: true }).click();
-  await expect(page.locator('html')).toHaveAttribute('data-pager-active', 'true');
-  const after = await expectPagerSlice(page, expected);
-  expect(after.start).toBeLessThanOrEqual(before.end);
-  expect(after.end).toBeGreaterThanOrEqual(before.start);
-  await expectNoHorizontalOverflow(page);
-  await pagerClose(page).click();
-  await expectPagerClosed(page);
 });
 
-test('风格切换保留解锁输入并且不发出解密请求', async ({ page }) => {
-  const requests = await installVaultFixture(page);
+test('fetch与neofetch输出当天快照，today支持文本筛选', async ({ page }) => {
   await visit(page);
-  await runCommand(page, 'unlock');
-  await unlockPassword(page).fill(VAULT_PASSWORD);
-  await page.getByRole('button', { name: '复古', exact: true }).click();
-  await expect(unlockForm(page)).toBeVisible();
-  await expect(unlockPassword(page)).toHaveValue(VAULT_PASSWORD);
-  await expectLocked(page);
-  await unlockCancel(page).click();
-  await expectPasswordAbsent(page, requests);
+  await runCommand(page, 'clear');
+  for (const command of ['fetch', 'neofetch']) {
+    await runCommand(page, command);
+    await expect(output(page).locator('.ascii-logo')).toHaveCount(1);
+    await expect(output(page).locator('[data-fetch-field="time"]')).toContainText(/\d{2}:\d{2}:\d{2}/);
+    await expect(output(page).locator('[data-fetch-field="zone"]')).toContainText('UTC');
+  }
+  await runCommand(page, 'today | wc -l');
+  await expect(output(page)).toHaveText('5');
 });
 
 test('motion off / on 更新根状态与 CLI 存储，刷新后保留选择', async ({ page }) => {
@@ -1477,7 +1473,7 @@ for (const action of ['home', 'exit', 'Control+d'] as const) {
     } else await runCommand(page, action);
     await expect.poll(() => new URL(page.url()).pathname).toBe('/');
     await expect(page.locator('#prompt-path')).toHaveText('~');
-    await expect(log(page).getByRole('heading', { level: 1 })).toHaveText(profile.brand);
+    await expect(log(page).locator('.ascii-logo')).toHaveCount(1);
     const listing = log(page).locator('.entry[data-command-line="ls"] > .output');
     expect(await listing.locator('button').allTextContents()).toEqual(['文章/', '关于', '联系']);
     await expectTheme(page, 'amber');

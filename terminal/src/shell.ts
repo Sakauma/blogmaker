@@ -1,5 +1,6 @@
 import { files, isVaultUnlocked, onFilesChanged, posts, projectFiles, routeFor } from './content';
 import type { ContentFile } from './content';
+import { dailyInfo } from './daily';
 
 export type Theme = 'dark' | 'light' | 'amber';
 export type Appearance = 'modern' | 'retro';
@@ -25,7 +26,7 @@ const COMMANDS = [
   'about', 'ascii', 'banner', 'cat', 'cd', 'clear', 'coffee', 'contact', 'date', 'echo', 'exit',
   'find', 'grep', 'head', 'help', 'history', 'home', 'less', 'ls', 'matrix', 'more', 'motion', 'neofetch',
   'notes', 'open', 'posts', 'projects', 'pwd', 'readme', 'search', 'sudo', 'tags', 'tail', 'categories', 'archives', 'theme', 'tree', 'wc', 'whoami',
-  'unlock', 'lock', 'private', 'download', 'style',
+  'unlock', 'lock', 'private', 'download', 'style', 'fetch', 'today',
 ] as const;
 const COMMAND_SET = new Set<string>(COMMANDS);
 const OWNER_COMMANDS = new Set<string>(['projects', 'readme', 'download', 'lock']);
@@ -245,7 +246,8 @@ const HELP = [
   'motion on|off                choose animation preference',
   'ascii [donut|matrix|off]      ASCII experiments; matrix is an alias',
   'clear · history              clear the screen / show command history',
-  'neofetch · banner             show the welcome banner',
+  'fetch · neofetch · banner     show ASCII profile and a fresh daily snapshot',
+  'today                        local date, time, timezone and year progress',
   'whoami · date · coffee       visitor / current time / a small break',
   'posts · notes                list all articles with titles',
   'search text                  search article titles and full text',
@@ -618,6 +620,7 @@ function prepare(words: string[], state: ShellState, fs: FileSystem, receivesInp
     case 'history':
       noArgs(args, command);
       return effectPlan({ type: command });
+    case 'fetch':
     case 'neofetch':
     case 'banner':
       noArgs(args, command);
@@ -628,6 +631,9 @@ function prepare(words: string[], state: ShellState, fs: FileSystem, receivesInp
     case 'date':
       noArgs(args, command);
       return pure(() => [{ text: new Date().toISOString() }]);
+    case 'today':
+      noArgs(args, command);
+      return pure(() => dailyInfo().map(field => ({ text: `${field.label.padEnd(10)}${field.value}` })));
     case 'sudo':
       if (args.length !== 2 || args[0] !== 'make' || args[1] !== 'coffee') fail('sudo: available command: sudo make coffee');
       return pure(() => [{ text: '[coffee] A fresh cup. Take a breath.', tone: 'accent' }]);

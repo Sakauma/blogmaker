@@ -6,6 +6,7 @@ import { editCommandInput } from './editor';
 import { manifest, files, profile, posts, routeFor, hrefForCommand, hrefForFile, setPrivateFiles, clearPrivateFiles, isVaultUnlocked } from './content';
 import { decryptPrivateVault, privateDownload } from './vault';
 import { appendContentText } from './links';
+import { dailyInfo } from './daily';
 
 const root = document.documentElement;
 const app = document.querySelector<HTMLDivElement>('#app')!;
@@ -31,10 +32,7 @@ app.innerHTML = `
   <main id="terminal-screen" aria-label="Sakauma 交互终端">
     <header class="terminal-title">
       <span class="title-identity"><span class="title-mark">&gt;_</span> sakauma<span class="title-separator"> / </span><span class="title-context muted">journal</span></span>
-      <div class="style-switch" role="group" aria-label="界面风格">
-        <button type="button" data-style-choice="modern" aria-pressed="true">现代</button>
-        <button type="button" data-style-choice="retro" aria-pressed="false">复古</button>
-      </div>
+      <span id="style-status" class="muted" title="输入 style modern 或 style retro 切换">style:modern</span>
     </header>
     <div id="scrollback" role="region" aria-label="终端会话内容">
       <div id="terminal-log" role="log" aria-label="终端输出" aria-live="polite" aria-relevant="additions"></div>
@@ -129,8 +127,10 @@ function banner(container: HTMLElement): void {
   logo.setAttribute('aria-label', 'Sakauma');
   const info = node('div', 'fetch-info');
   info.append(node('div', 'fetch-user', 'visitor@sakauma'), node('div', 'muted', '─────────────'));
-  for (const [label, value] of [['name', profile.name], ['work', profile.role], ['posts', `${posts.length} 篇文章`]]) {
+  for (const [label, value] of [['name', profile.name], ['work', profile.role], ['posts', `${posts.length} 篇文章`],
+    ...dailyInfo().map(field => [field.label, field.value])]) {
     const row = node('div', 'fetch-row');
+    row.dataset.fetchField = label;
     row.append(node('span', 'fetch-key', label), node('span', '', value));
     info.append(row);
   }
@@ -150,9 +150,7 @@ function updateUI(): void {
   root.dataset.style = state.style;
   root.dataset.motion = state.motion ? 'on' : 'off';
   document.querySelector('.title-context')!.textContent = state.style === 'retro' ? 'dev/tty1' : 'journal';
-  for (const button of document.querySelectorAll<HTMLButtonElement>('[data-style-choice]')) {
-    button.setAttribute('aria-pressed', String(button.dataset.styleChoice === state.style));
-  }
+  document.querySelector('#style-status')!.textContent = `style:${state.style}`;
   document.querySelector('#prompt-path')!.textContent = pathLabel();
   document.querySelector('.status-directory')!.textContent = pathLabel();
   root.dataset.vault = isVaultUnlocked() ? 'unlocked' : 'locked';
@@ -468,17 +466,6 @@ document.addEventListener('keydown', (event) => {
 });
 document.addEventListener('click', (event) => {
   if (!(event.target instanceof Element)) return;
-  const appearance = event.target.closest<HTMLButtonElement>('[data-style-choice]')?.dataset.styleChoice;
-  if (appearance === 'modern' || appearance === 'retro') {
-    // A visual preference must not close a pager, cancel an unlock, discard an
-    // unfinished command or move the reader to the end of a long document.
-    state = runCommand(`style ${appearance}`, state).state;
-    save('style', state.style);
-    updateUI();
-    resizeInput();
-    requestAnimationFrame(updateJump);
-    return;
-  }
   const link = event.target.closest<HTMLAnchorElement>('a[data-route]');
   if (link && event.button === 0 && !event.ctrlKey && !event.metaKey && !event.shiftKey && !event.altKey) {
     const path = link.dataset.route!;
@@ -530,24 +517,17 @@ window.addEventListener('pagehide', () => {
 
 function showHome(): void {
   state = { ...state, cwd: '/' };
-  const intro = node('section', 'home-intro');
-  intro.setAttribute('aria-label', '个人简介');
-  intro.append(node('div', 'home-kicker', `${profile.name} / ${profile.role}`));
-  intro.append(node('h1', 'home-name', profile.brand));
-  const motto = node('p', 'home-motto');
-  for (const [index, part] of profile.motto.entries()) {
-    if (index) motto.append(document.createElement('br'));
-    motto.append(document.createTextNode(part));
-  }
-  intro.append(motto, node('p', 'home-interests', profile.interests));
-  intro.append(node('div', 'home-count', `${posts.length} 篇文章 · 中文 / Русский`));
-  log.append(intro);
+  banner(entry('fetch'));
   const listing = entry('ls');
   listing.classList.add('directory-grid');
   linesInto(listing, runCommand('ls', state).lines);
   const starters = node('div', 'starter-commands');
   starters.append(node('span', 'muted', '点击目录，或输入命令。'), commandLink('help', 'help'),
     node('span', 'muted', ' 查看用法 · '), commandLink('ls -a', 'ls -a'), node('span', 'muted', ' 查看全部文件'));
+  const appearanceHint = node('div', 'style-hint');
+  appearanceHint.append(node('span', 'muted', '风格：输入 '), node('code', '', 'style modern'),
+    node('span', 'muted', ' / '), node('code', '', 'style retro'));
+  starters.append(appearanceHint);
   log.append(starters);
   updateUI();
 }
