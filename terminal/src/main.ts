@@ -111,12 +111,6 @@ function linesInto(container: HTMLElement, lines: ShellLine[]): void {
     container.append(row);
   }
 }
-function commandLink(text: string, command: string): HTMLButtonElement {
-  const button = node('button', 'text-command', text);
-  button.type = 'button';
-  button.dataset.command = command;
-  return button;
-}
 function banner(container: HTMLElement): void {
   const fetch = node('div', 'fetch-output');
   const logo = node('pre', 'ascii-logo', String.raw` ____   _   _  __   _   _   _ __  __    _
@@ -519,20 +513,7 @@ function showHome(): void {
   state = { ...state, cwd: '/' };
   // Welcome content is not command history. Only real submissions get an echo.
   const home = node('section', 'home-view');
-  const intro = node('div', 'home-profile');
-  banner(intro);
-  const listing = node('div', 'home-directory directory-grid');
-  listing.setAttribute('role', 'group');
-  listing.setAttribute('aria-label', '公开目录');
-  linesInto(listing, runCommand('ls', state).lines);
-  const starters = node('div', 'starter-commands');
-  starters.append(node('span', 'muted', '点击目录，或输入命令。'), commandLink('help', 'help'),
-    node('span', 'muted', ' 查看用法 · '), commandLink('ls -a', 'ls -a'), node('span', 'muted', ' 查看全部文件'));
-  const appearanceHint = node('div', 'style-hint');
-  appearanceHint.append(node('span', 'muted', '风格：输入 '), node('code', '', 'style modern'),
-    node('span', 'muted', ' / '), node('code', '', 'style retro'));
-  starters.append(appearanceHint);
-  home.append(intro, listing, starters);
+  banner(home);
   log.append(home);
   updateUI();
 }

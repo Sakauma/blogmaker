@@ -84,8 +84,6 @@ button { border: 0; background: none; padding: 0; }
 .title-separator { margin: 0 9px; color: var(--line); }
 .title-identity { min-width: 0; }
 #style-status { flex: 0 0 auto; font-size: 11px; }
-.style-hint { margin-top: 5px; }
-.style-hint code { font: inherit; color: var(--path); }
 /* The document owns scrolling, including the empty space beside the terminal. */
 #scrollback {
   flex: 1 0 auto;
@@ -113,9 +111,7 @@ button { border: 0; background: none; padding: 0; }
 .text-command:hover { text-decoration: underline; text-underline-offset: 4px; color: var(--accent); }
 .content-link { color: var(--path); text-decoration: underline; text-underline-offset: 3px; overflow-wrap: anywhere; }
 .content-link:hover { color: var(--accent); }
-.directory-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); max-width: 480px; gap: 2px 18px; }
-.directory-grid .text-command { min-height: 44px; padding-right: 16px; }
-.home-directory { margin-top: 22px; }
+.home-view { margin-bottom: 24px; }
 .entry { scroll-margin-top: 24px; }
 .fetch-output { display: flex; align-items: center; gap: 38px; padding: 18px 0 20px; }
 .ascii-logo { flex: 0 0 auto; font: 500 16px/1.2 var(--mono); color: var(--accent); margin: 0; letter-spacing: -0.05em; white-space: pre; }
@@ -128,7 +124,6 @@ button { border: 0; background: none; padding: 0; }
 .ansi-colors { display: flex; line-height: 1; font-size: 13px; margin-top: 9px; }
 .ansi-0 { color: #535b57; }.ansi-1 { color: #cc8b83; }.ansi-2 { color: #a6c68a; }.ansi-3 { color: #cdb47d; }
 .ansi-4 { color: #8cabbc; }.ansi-5 { color: #ac98b6; }.ansi-6 { color: #8bb9ac; }.ansi-7 { color: #d7d6c9; }
-.starter-commands { margin: 7px 0 25px; color: var(--accent); font-size: 12px; }
 #command-form { display: flex; align-items: flex-start; gap: 0; min-width: 0; margin-top: 6px; }
 .input-label { display: inline-flex; flex: 0 1 auto; align-items: baseline; max-width: 55%; min-height: 28px; line-height: 28px; }
 .input-label .prompt-path { max-width: 36ch; }
@@ -232,7 +227,6 @@ html[data-style='retro'] .ascii-logo { text-shadow: 0 0 12px color-mix(in srgb, 
   #scrollback { padding-top: 22px; padding-bottom: 36px; }
   .fetch-output { align-items: flex-start; flex-direction: column; gap: 17px; padding: 12px 0 18px; }
   .ascii-logo { font-size: clamp(10px, 3vw, 14px); }
-  .directory-grid { gap: 2px 14px; }
   .title-context, .title-separator { display: none; }
   html[data-style='retro'] #app { padding: 8px; }
   html[data-style='retro'] #terminal-screen { padding-inline: 16px; min-height: calc(100vh - 16px); min-height: calc(100dvh - 16px); }
@@ -243,7 +237,6 @@ html[data-style='retro'] .ascii-logo { text-shadow: 0 0 12px color-mix(in srgb, 
   .fetch-user { display: none; }
   .ansi-colors { margin-top: 8px; font-size: 10px; }
   .entry { margin-bottom: 19px; }
-  .starter-commands { line-height: 2; margin-bottom: 18px; font-size: 11px; }
   .input-label { max-width: 52%; flex-wrap: wrap; }
   .prompt-symbol { margin-right: 8px; margin-left: 6px; }
   #command-input { font-size: 16px; }

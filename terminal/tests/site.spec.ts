@@ -405,7 +405,7 @@ test('桌面首屏为深色纯终端，常驻命令行、滚动日志与按钮�
   expect(pageErrors).toEqual([]);
 });
 
-test('首页保留 ASCII fetch、当天信息和三个入口，首屏目录与真实 ls 一致', async ({ page }) => {
+test('首页仅展示 fetch 信息与单个输入行，目录和用法通过命令获取', async ({ page }) => {
   await visit(page);
   await expect(form(page)).toHaveCount(1);
   await expect(log(page).locator('.echo-line, .entry')).toHaveCount(0);
@@ -415,11 +415,9 @@ test('首页保留 ASCII fetch、当天信息和三个入口，首屏目录与�
   await expect(daily).toHaveText(/today\d{4}-\d{2}-\d{2} · 星期[日一二三四五六]/);
   await expect(log(page).locator('[data-fetch-field="year"]')).toContainText(/第 \d+ \/ 36[56] 天/);
   await expect(log(page).locator('[data-fetch-field="progress"]')).toContainText(/\[[#-]{12}\] \d+\.\d%/);
-  const initialListing = log(page).getByRole('group', { name: '公开目录', exact: true });
-  await expect(initialListing).toHaveCount(1);
-  const initialText = await initialListing.innerText();
-  expect(await initialListing.locator('button').allTextContents()).toEqual(['文章/', '关于', '联系']);
-  for (const path of ['home.txt', '404.txt', 'tags/', 'archives/', 'private/']) expect(initialText).not.toContain(path);
+  await expect(log(page).locator('.home-view button, .home-directory, .starter-commands, .style-hint')).toHaveCount(0);
+  await expect(log(page)).not.toContainText('点击目录，或输入命令');
+  await expect(log(page)).not.toContainText('风格：输入');
   await expect(screen(page)).toContainText('visitor@sakauma');
   for (const value of [profile.name, profile.role, profile.interests, profile.motto.join(''), `${manifest.posts.length} 篇文章`]) {
     await expect(log(page)).toContainText(value);
@@ -428,7 +426,9 @@ test('首页保留 ASCII fetch、当天信息和三个入口，首屏目录与�
   await runCommand(page, 'clear');
   await runCommand(page, 'ls');
   await expect(log(page).locator('.echo-line')).toHaveCount(1);
-  await expect(output(page)).toHaveText(initialText, { useInnerText: true });
+  expect(await output(page).locator('button').allTextContents()).toEqual(['文章/', '关于', '联系']);
+  await runCommand(page, 'help');
+  await expect(output(page)).toContainText('style modern|retro');
 });
 
 test('键入 Enter 与执行箭头均能运行命令，输出留在当前日志和当前页面', async ({ page }) => {
@@ -955,7 +955,7 @@ test('风格仅通过命令切换，保留正文、配色和刷新偏好', async
   await visit(page);
   await expect(page.locator('[data-style-choice], .style-switch')).toHaveCount(0);
   await expect(page.getByRole('button', { name: '复古', exact: true })).toHaveCount(0);
-  await expect(page.locator('.style-hint')).toContainText('style modern / style retro');
+  await expect(page.locator('.style-hint')).toHaveCount(0);
   await runCommand(page, 'theme light');
   await runCommand(page, 'clear');
   await runCommand(page, 'cat ' + quote(russianPost.file));
@@ -1480,8 +1480,7 @@ for (const action of ['home', 'exit', 'Control+d'] as const) {
     await expect(page.locator('#prompt-path')).toHaveText('~');
     await expect(log(page).locator('.ascii-logo')).toHaveCount(1);
     await expect(log(page).locator('.echo-line, .entry')).toHaveCount(0);
-    const listing = log(page).getByRole('group', { name: '公开目录', exact: true });
-    expect(await listing.locator('button').allTextContents()).toEqual(['文章/', '关于', '联系']);
+    await expect(log(page).locator('.home-view button, .home-directory, .starter-commands, .style-hint')).toHaveCount(0);
     await expectTheme(page, 'amber');
     await expectInputUsable(page);
     expect(await page.evaluate(() => Reflect.get(window, '__homeDocumentMarker'))).toBe(marker);
