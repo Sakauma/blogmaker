@@ -894,11 +894,17 @@ test('completion respects grep patterns, multi-file arguments, pager arity and p
   assert.deepEqual(completeCommand('exit ', initial).candidates, []);
 });
 
-test('help documents regex grep, UTF-8 bytes, filters, documents and the final-pager contract', () => {
+test('help keeps command syntax and short labels without interface commentary', () => {
   const help = texts(run('help')).join('\n');
-  for (const text of ['home · exit', 'more [file]', 'less [file]', '[-name GLOB]', '[-type f|d]', 'JS regex', '-F is literal', 'tail [-n N|-N|+N]', 'UTF-8 byte', './file.md · contact', 'pager must finish a pipeline']) {
+  for (const text of ['home · exit', 'more [file]', 'less [file]', '[-name GLOB]', '[-type f|d]', 'JS regex', '-F: literal', 'tail [-n N|-N|+N]', 'UTF-8 bytes', './file.md · contact', 'style modern|retro']) {
     assert.ok(help.includes(text), text);
   }
+  assert.doesNotMatch(help, /click a title|keep appearance|independent of|virtual filesystem|Tab completes|must finish a pipeline/);
+});
+
+test('command errors report the error without follow-up instructions', () => {
+  assert.deepEqual(texts(run('missing-command')), ['missing-command: command not found']);
+  assert.deepEqual(texts(run('cat /private/README.md | wc')), ['private: locked']);
 });
 
 test('document paths execute with full text, a document effect and their canonical file', () => {

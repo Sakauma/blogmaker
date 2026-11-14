@@ -41,7 +41,7 @@ interface Source { path?: string; lines: ShellLine[]; text: string }
 interface Plan { kind: 'text' | 'standalone' | 'pager'; run: (stdin?: ShellLine[]) => ShellResult }
 class ShellError extends Error {}
 export class LockedError extends ShellError {
-  constructor() { super('private: locked. Run unlock to read private files.'); this.name = 'LockedError'; }
+  constructor() { super('private: locked'); this.name = 'LockedError'; }
 }
 
 function fail(message: string): never { throw new ShellError(message); }
@@ -225,48 +225,42 @@ function globPattern(pattern: string): RegExp {
 }
 
 const HELP = [
-  'Commands · / is the website root (~)',
-  'help                         show this guide',
-  'ls [-a/-l] [path]             curated directory; -a shows all raw filenames',
-  'ls posts                     list article titles; click a title to read',
-  'cd [path] · pwd               move through directories / print your path',
-  'home · exit                  return home; keep appearance preferences',
-  'cat file [file ...]           read complete text (or piped input)',
-  './file.md · contact          open a document from the beginning',
-  'more [file] · less [file]     page a complete file or piped text',
-  'tree [path]                  explore the virtual filesystem',
-  'find [paths...] [-name GLOB] [-type f|d]  match names (* ? []) and kinds',
-  'grep [-iF] pattern [files...] match a JS regex; -i ignores case, -F is literal',
-  'head [-n N|-N] [files...]     first lines (default: 10; N: 0..1000)',
-  'tail [-n N|-N|+N] [files...]  last lines (default: 10); +N starts at line N',
-  'wc [-lwc] [files...]          line / word / UTF-8 byte counts and totals',
-  'echo text                    print text literally',
-  'theme dark|light|amber        choose terminal colors',
-  'style modern|retro           choose layout; independent of terminal colors',
-  'motion on|off                choose animation preference',
-  'ascii [donut|matrix|off]      ASCII experiments; matrix is an alias',
-  'clear · history              clear the screen / show command history',
-  'fetch · neofetch · banner     show ASCII profile and a fresh daily snapshot',
-  'today                        local date, time, timezone and year progress',
-  'whoami · date · coffee       visitor / current time / a small break',
-  'posts · notes                list all articles with titles',
-  'search text                  search article titles and full text',
-  'about                        personal introduction',
-  'unlock · private             unlock private documents / browse private files',
-  'tags · categories · archives browse the article indexes',
-  'open id|path|url             read an article by id or published URL',
-  '',
-  'Tab completes commands, options, values and paths. Quotes and escapes preserve spaces.',
-  'Text filters accept piped input: posts | grep 雷鬼 | wc -l',
-  'A pager must finish a pipeline: cat about.txt | less',
+  'help                         commands',
+  'ls [-al] [path]               directory; -a: all',
+  'ls posts                     article titles',
+  'cd [path] · pwd               directory / path',
+  'home · exit                  home',
+  'cat file [file ...]           text',
+  './file.md · contact          document / contact',
+  'more [file] · less [file]     pager',
+  'tree [path]                  directory tree',
+  'find [paths...] [-name GLOB] [-type f|d]  files',
+  'grep [-iF] pattern [files...] JS regex; -i: ignore case; -F: literal',
+  'head [-n N|-N] [files...]     first N lines',
+  'tail [-n N|-N|+N] [files...]  last N lines; +N: from line N',
+  'wc [-lwc] [files...]          lines / words / UTF-8 bytes',
+  'echo text                    text',
+  'theme dark|light|amber        colors',
+  'style modern|retro           layout',
+  'motion on|off                motion',
+  'ascii [donut|matrix|off]      animation',
+  'clear · history              clear / history',
+  'fetch · neofetch · banner     profile',
+  'today                        date / time / year progress',
+  'whoami · date · coffee       visitor / time / coffee',
+  'posts · notes                articles',
+  'search text                  article search',
+  'about                        about',
+  'unlock · private             unlock / files',
+  'tags · categories · archives indexes',
+  'open id|path|url             article',
 ];
 
 const OWNER_HELP = [
   '',
-  'Private documents · unlocked',
-  'readme · projects            owner notes / private source projects',
-  'download file                download text or an attached binary file',
-  'lock                         clear private documents and lock the vault',
+  'readme · projects            notes / projects',
+  'download file                download',
+  'lock                         lock',
 ];
 
 function prepare(words: string[], state: ShellState, fs: FileSystem, receivesInput: boolean, inPipeline: boolean): Plan {
@@ -300,7 +294,7 @@ function prepare(words: string[], state: ShellState, fs: FileSystem, receivesInp
     const path = normalizePath(command, state.cwd);
     guardPath(path);
     const entry = fs.get(path);
-    if (!entry) fail(`${command}: command not found. Type help.`);
+    if (!entry) fail(`${command}: command not found`);
     if (entry.kind === 'directory') fail(`${command}: is a directory`);
     noArgs(args, command);
     return documentPlan(command);
@@ -425,7 +419,7 @@ function prepare(words: string[], state: ShellState, fs: FileSystem, receivesInp
       if (/^https?:\/\//i.test(id)) {
         try {
           const url = new URL(id);
-          if (url.hostname.toLowerCase() !== 'sakauma.github.io') fail('open: use an article URL from sakauma.github.io');
+          if (url.hostname.toLowerCase() !== 'sakauma.github.io') fail('open: expected a sakauma.github.io URL');
           urlPath = url.pathname;
         } catch (error) { if (error instanceof ShellError) throw error; fail('open: invalid article URL'); }
       }
@@ -641,7 +635,7 @@ function prepare(words: string[], state: ShellState, fs: FileSystem, receivesInp
       noArgs(args, command);
       return pure(() => [{ text: '[coffee] A fresh cup. Take a breath.', tone: 'accent' }]);
     default:
-      return fail(`${command}: command not found. Type help.`);
+      return fail(`${command}: command not found`);
   }
 }
 
@@ -660,7 +654,7 @@ export function runCommand(input: string, state: ShellState): ShellResult {
         fail('pipeline: more/less must be the final command');
       }
       if (plans.some(plan => plan.kind === 'standalone')) {
-        fail('pipeline: only text-producing commands are allowed before an optional final pager; state and display commands must run on their own');
+        fail('pipeline: only text-producing commands');
       }
     }
     let output: ShellResult = { lines: [], state: original };

@@ -416,6 +416,9 @@ test('首页仅展示 fetch 信息与单个输入行，目录和用法通过命�
   await expect(log(page).locator('[data-fetch-field="year"]')).toContainText(/第 \d+ \/ 36[56] 天/);
   await expect(log(page).locator('[data-fetch-field="progress"]')).toContainText(/\[[#-]{12}\] \d+\.\d%/);
   await expect(log(page).locator('.home-view button, .home-directory, .starter-commands, .style-hint')).toHaveCount(0);
+  await expect(page.locator('#keyboard-help, .pager-help, #history-panel .muted')).toHaveCount(0);
+  await expect(page.locator('#style-status')).not.toHaveAttribute('title');
+  await expect(input(page)).not.toHaveAttribute('aria-describedby');
   await expect(log(page)).not.toContainText('点击目录，或输入命令');
   await expect(log(page)).not.toContainText('风格：输入');
   await expect(screen(page)).toContainText('visitor@sakauma');
@@ -429,6 +432,20 @@ test('首页仅展示 fetch 信息与单个输入行，目录和用法通过命�
   expect(await output(page).locator('button').allTextContents()).toEqual(['文章/', '关于', '联系']);
   await runCommand(page, 'help');
   await expect(output(page)).toContainText('style modern|retro');
+});
+
+test('分页和动画只显示内容、控件与状态', async ({ page }) => {
+  await visit(page);
+  await runCommand(page, 'ascii donut');
+  await expect(page.locator('.ascii-caption')).toHaveText(/^donut \/ (RUNNING|STILL)$/);
+  await input(page).press('Escape');
+  await expect(page.locator('.ascii-caption')).toHaveText('donut / STOPPED');
+  await runCommand(page, 'less /posts/index.md');
+  await expect(pager(page)).toBeVisible();
+  await expect(page.locator('.pager-help')).toHaveCount(0);
+  await pagerClose(page).click();
+  await expectPagerClosed(page);
+  await expect(output(page)).toBeEmpty();
 });
 
 test('键入 Enter 与执行箭头均能运行命令，输出留在当前日志和当前页面', async ({ page }) => {

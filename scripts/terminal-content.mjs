@@ -133,9 +133,7 @@ export async function createTerminalContent(root) {
   ].join('\n'));
   addFile('/home.txt', [
     `# ${profile.brand}`, '', `${profile.name} / ${profile.role}`, '', ...profile.motto, '', profile.interests, profile.welcome, '',
-    `${posts.length} 篇公开文章。`, '',
-    'posts                   浏览日志', 'about                   个人介绍', 'contact                 联系方式',
-    'tags / archives         标签与归档', 'less /posts/index.md    分页阅读', 'help                    命令与快捷键', '', profile.footer,
+    `${posts.length} 篇文章`, '', profile.footer,
   ].join('\n'));
 
   function rows(items) { return '<ul>' + items.map(p => `<li>${e(p.date)} — ${htmlLink(p.title, p.path)}</li>`).join('\n') + '</ul>'; }
@@ -190,7 +188,7 @@ export async function createTerminalContent(root) {
     return homeValues[key];
   });
   document('/', `${profile.brand} | ${profile.name}`, '/home.txt', home.match(/<body[^>]*>([\s\S]*?)<\/body>/i)?.[1] || home);
-  addFile('/404.txt', '404 — 页面未找到\n\n输入 ls、help 或 cat /posts/index.md 继续浏览。');
+  addFile('/404.txt', '404 — 页面未找到');
   document('/404.html', '404 — Sakauma', '/404.txt', '<h1>404</h1><p>页面未找到。</p><p><a href="/">返回首页</a> · <a href="/list/">全部文章</a></p>');
   let vault;
   let vaultBytes;
@@ -202,7 +200,7 @@ export async function createTerminalContent(root) {
     const version = createHash('sha256').update(vaultBytes).digest('hex');
     vault = { url: `/private/vault.json?v=${version}` };
     routes['/private/'] = { title: '私密资料', command: 'private' };
-    documents.set('/private/', { title: '私密资料', canonical: '/private/', html: '<h1>私密资料</h1><p>已上锁。启用 JavaScript 后输入访问密码。</p>' });
+    documents.set('/private/', { title: '私密资料', canonical: '/private/', html: '<h1>私密资料</h1><p>已上锁。</p>' });
   }
   return { manifest: { version: 1, profile, files, posts: metadata, routes, ...(vault ? { vault } : {}) }, documents, vaultBytes };
 }

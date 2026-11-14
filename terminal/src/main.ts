@@ -32,17 +32,17 @@ app.innerHTML = `
   <main id="terminal-screen" aria-label="Sakauma 交互终端">
     <header class="terminal-title">
       <span class="title-identity"><span class="title-mark">&gt;_</span> sakauma<span class="title-separator"> / </span><span class="title-context muted">${state.style === 'retro' ? 'dev/tty1' : 'journal'}</span></span>
-      <span id="style-status" class="muted" title="输入 style modern 或 style retro 切换">style:${state.style}</span>
+      <span id="style-status" class="muted">style:${state.style}</span>
     </header>
     <div id="scrollback" role="region" aria-label="终端会话内容">
       <div id="terminal-log" role="log" aria-label="终端输出" aria-live="polite" aria-relevant="additions"></div>
       <form id="command-form" autocomplete="off">
         <label class="input-label" for="command-input"><span class="prompt-user">visitor@sakauma</span><span class="muted">:</span><span id="prompt-path" class="prompt-path">~</span><span class="prompt-symbol">$</span></label>
-        <div class="input-editor"><textarea id="command-input" rows="1" maxlength="4096" aria-label="终端命令" aria-describedby="keyboard-help" autocomplete="off" autocapitalize="off" spellcheck="false" enterkeyhint="send"></textarea><span class="empty-cursor" aria-hidden="true"></span></div>
+        <div class="input-editor"><textarea id="command-input" rows="1" maxlength="4096" aria-label="终端命令" autocomplete="off" autocapitalize="off" spellcheck="false" enterkeyhint="send"></textarea><span class="empty-cursor" aria-hidden="true"></span></div>
         <button type="submit" class="enter-key" aria-label="执行命令" title="Enter">↵</button>
       </form>
       <form id="unlock-form" hidden>
-        <div class="unlock-heading">private — 输入访问密码</div>
+        <div class="unlock-heading">private</div>
         <div class="unlock-row"><label for="unlock-password">password:</label><input id="unlock-password" name="password" type="password" aria-label="访问密码" autocomplete="current-password" autocapitalize="off" spellcheck="false" maxlength="4096" required /><button id="unlock-submit" type="submit">解锁</button><button id="unlock-cancel" type="button">取消</button></div>
         <div id="unlock-status" role="status" aria-live="polite"></div>
       </form>
@@ -50,10 +50,9 @@ app.innerHTML = `
       <div id="history-panel" hidden>
         <label for="history-search">(reverse-i-search):</label>
         <input id="history-search" aria-label="搜索命令历史" autocomplete="off" autocapitalize="off" spellcheck="false" />
-        <div id="history-match"></div><span class="muted">Enter 选取 · Ctrl+R 上一条 · Esc 返回</span>
+        <div id="history-match"></div>
       </div>
-      <div id="keyboard-help" class="keyboard-help"><span>Tab 补全</span><span>↑↓ 历史</span><span>Ctrl+L 清屏</span><span class="desktop-help">Ctrl+R 搜索</span></div>
-      <button id="jump-latest" type="button" hidden>↓ 回到输入行</button>
+      <button id="jump-latest" type="button" aria-label="回到输入行" hidden>↓</button>
     </div>
     <footer class="status-line"><span class="session-label">0:shell<span aria-hidden="true">*</span></span><span class="status-directory">~</span><span class="status-right"><button type="button" id="vault-command" data-command="unlock" aria-label="解锁私密资料">unlock</button><span class="status-divider">│</span><button type="button" id="theme-command" data-command="theme light" aria-label="切换终端主题">dark</button><span class="status-divider">│</span><button type="button" id="motion-command" data-command="motion off" aria-label="切换字符动效">motion:on</button><span class="encoding">UTF-8</span></span></footer>
   </main>`;
@@ -192,12 +191,10 @@ function stopPager(resume = false): void {
   const current = pager;
   pager = null;
   const output = current.output;
-  const summary = current.summary;
   current.dispose();
   delete root.dataset.pagerActive;
   output.parentElement?.classList.remove('pager-entry');
   output.replaceChildren();
-  linesInto(output, [{ text: summary, tone: 'muted' }]);
   form.hidden = false;
   if (resume) { focusInput(); scrollToPrompt(); }
   updateJump();
@@ -269,7 +266,7 @@ unlockForm.addEventListener('submit', async (event) => {
   const password = unlockPassword.value;
   unlockPassword.value = '';
   unlockPassword.disabled = unlockSubmit.disabled = true;
-  unlockStatus.textContent = '正在解锁…';
+  unlockStatus.textContent = '解锁中…';
   const generation = unlockGeneration;
   const controller = new AbortController();
   unlockController = controller;
@@ -289,7 +286,7 @@ unlockForm.addEventListener('submit', async (event) => {
     if (controller.signal.aborted || generation !== unlockGeneration) return;
     unlockController = null;
     unlockPassword.disabled = unlockSubmit.disabled = false;
-    unlockStatus.textContent = error instanceof Error ? error.message : '解锁失败，请重试。';
+    unlockStatus.textContent = error instanceof Error ? error.message : '解锁失败。';
     unlockPassword.focus({ preventScroll: true });
   }
 });

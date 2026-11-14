@@ -65,13 +65,16 @@ test('shared manifest preserves the migration baseline and every currently publi
   assert.ok(files.get('/about.txt').includes('ajax_mao@163.com'));
   assert.ok(files.get('/about.txt').includes('在精神上感染了艾滋病'));
   assert.ok(files.has('/home.txt'));
+  assert.match(files.get('/home.txt'), new RegExp(`${manifest.posts.length} 篇文章`));
+  assert.doesNotMatch(files.get('/home.txt'), /浏览日志|命令与快捷键|分页阅读|公开文章/);
+  assert.equal(files.get('/404.txt'), '404 — 页面未找到');
   for (const privatePath of ['/README.md', '/assets.md', '/projects/blogmaker.md', '/projects/homepage.md', '/lab/README.txt']) {
     assert.ok(!files.has(privatePath), `old owner document removed from public manifest: ${privatePath}`);
   }
   assert.ok(!manifest.files.some(file => file.path.startsWith('/private/')));
   assert.match(manifest.vault.url, /^\/private\/vault\.json\?v=[0-9a-f]{64}$/);
   assert.equal(manifest.routes['/private/'].command, 'private');
-  assert.match(documents.get('/private/').html, /已上锁/);
+  assert.equal(documents.get('/private/').html, '<h1>私密资料</h1><p>已上锁。</p>');
   const expectedUpdates = new Map();
   for (const post of manifest.posts) {
     const source = sources.get(post.id);

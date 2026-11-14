@@ -149,7 +149,6 @@ button { border: 0; background: none; padding: 0; }
 #command-form:focus-within:not(.has-text) #command-input { caret-color: transparent; }
 .enter-key { flex: 0 0 36px; min-height: 30px; color: var(--muted); font-size: 18px; opacity: 0.55; }
 .enter-key:hover, .enter-key:focus-visible { opacity: 1; color: var(--accent); }
-.keyboard-help { display: flex; flex-wrap: wrap; gap: 8px 22px; margin-top: 16px; color: var(--muted); font-size: 10px; }
 .completion-hints { color: var(--path); white-space: pre-wrap; font-size: 12px; margin-top: 8px; }
 #history-panel { margin-top: 14px; color: var(--path); }
 #history-search { background: none; outline: 0; border: 0; border-bottom: 1px solid var(--line); margin-left: 8px; width: min(30ch, 50%); caret-color: var(--accent); }
@@ -176,8 +175,7 @@ button { border: 0; background: none; padding: 0; }
 .ascii-animation pre { margin: 0; font: 13px/1.12 var(--mono); letter-spacing: 0; white-space: pre; }
 .ascii-caption { color: var(--muted); font-size: 11px; margin-top: 14px; }
 /* Paging is explicit: ordinary output continues to use document scrolling. */
-html[data-pager-active='true'] #terminal-log > :not(.pager-entry),
-html[data-pager-active='true'] .keyboard-help { display: none; }
+html[data-pager-active='true'] #terminal-log > :not(.pager-entry) { display: none; }
 html[data-pager-active='true'] #scrollback { padding-bottom: 18px; }
 .pager-entry { margin-bottom: 0; }
 .pager { min-width: 0; }
@@ -187,7 +185,6 @@ html[data-pager-active='true'] #scrollback { padding-bottom: 18px; }
 .pager-controls button { min-height: 32px; }
 .pager-controls button:disabled { cursor: default; color: var(--muted); opacity: .5; text-decoration: none; }
 .pager-status { font-size: 12px; color: var(--accent); min-height: 21px; }
-.pager-help { font-size: 11px; margin-bottom: 12px; }
 .pager-window { overflow: clip; min-width: 0; }
 .pager-content { position: relative; line-height: inherit; transform-origin: top left; }
 @keyframes cursor-blink { 0%, 49% { opacity: 1; } 50%, 100% { opacity: 0; } }
@@ -246,7 +243,6 @@ html[data-style='retro'] .ascii-logo { text-shadow: 0 0 12px color-mix(in srgb, 
   .status-right { gap: 8px; }
   .encoding { display: none; }
   .ascii-animation pre { font-size: 12px; }
-  .keyboard-help { font-size: 9px; gap: 6px 12px; margin-top: 13px; }
 }
 @media (max-width: 380px) {
   #terminal-screen { padding: 0 12px; }
@@ -254,7 +250,6 @@ html[data-style='retro'] .ascii-logo { text-shadow: 0 0 12px color-mix(in srgb, 
   .ascii-logo { font-size: 10px; }
   .ascii-animation pre { font-size: 10px; }
   .input-label .prompt-user { font-size: 11px; }
-  .desktop-help { display: none; }
 }
 html[data-motion='off'] *, html[data-motion='off'] *::before, html[data-motion='off'] *::after { animation: none !important; scroll-behavior: auto !important; }
 @media (prefers-reduced-motion: reduce) { html:not([data-motion='on']) * { animation: none !important; } }

@@ -31,7 +31,7 @@ async function readEnvelope(response: Response): Promise<Envelope> {
       const chunk = await reader.read();
       if (chunk.done) break;
       length += chunk.value.byteLength;
-      if (length > MAX_ENVELOPE) { await reader.cancel(); throw new Error('资料包超过浏览器读取大小。'); }
+      if (length > MAX_ENVELOPE) { await reader.cancel(); throw new Error('资料包超过 32 MiB。'); }
       chunks.push(chunk.value);
     }
   } finally { reader.releaseLock(); }
@@ -44,12 +44,12 @@ async function readEnvelope(response: Response): Promise<Envelope> {
 
 /** The password stays in this tab. Only encrypted bytes are requested from the site. */
 export async function decryptPrivateVault(url: string, password: string, signal: AbortSignal): Promise<ContentFile[]> {
-  if (!crypto.subtle) throw new Error('请通过 HTTPS 或本地预览打开私密资料。');
+  if (!crypto.subtle) throw new Error('需要 Web Crypto（HTTPS / localhost）。');
   const address = new URL(url, location.origin);
   if (address.origin !== location.origin || address.pathname !== '/private/vault.json') throw new Error('私密资料地址有误。');
   abort(signal);
   const response = await fetch(address, { signal, cache: 'no-store', credentials: 'omit', redirect: 'error' });
-  if (!response.ok) throw new Error('私密资料加载失败，请重试。');
+  if (!response.ok) throw new Error('私密资料加载失败。');
   const envelope = await readEnvelope(response);
   if (!envelope || envelope.version !== 1 || envelope.kdf !== 'PBKDF2-SHA256' || envelope.iterations !== 600000 || envelope.cipher !== 'AES-256-GCM') {
     throw new Error('资料包格式有误。');

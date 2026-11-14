@@ -80,7 +80,7 @@ export class AsciiAnimation {
     const active = this.running && this.motion && this.visible && !document.hidden;
     this.element.dataset.running = String(active);
     this.status.textContent = this.running
-      ? `${this.mode} / ${active ? 'RUNNING' : 'STILL'}   ·   Esc / Ctrl+C 停止`
+      ? `${this.mode} / ${active ? 'RUNNING' : 'STILL'}`
       : `${this.mode} / STOPPED`;
     if (active) this.frame = requestAnimationFrame(this.tick);
   }

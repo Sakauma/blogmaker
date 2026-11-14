@@ -42,19 +42,16 @@ export class Pager {
     controls.className = 'pager-controls';
     this.previous = this.button('previous', '↑ 上一页', '上一页', () => this.move(-this.height));
     this.next = this.button('next', '↓ 下一页', '下一页', () => this.move(this.height));
-    controls.append(this.previous, this.next, this.button('close', 'q 退出', '退出分页', options.onExit));
+    controls.append(this.previous, this.next, this.button('close', '退出', '退出分页', options.onExit));
     this.status.className = 'pager-status';
     this.status.setAttribute('role', 'status');
     this.status.setAttribute('aria-live', 'polite');
-    const help = document.createElement('div');
-    help.className = 'pager-help muted';
-    help.textContent = 'Space / b 翻页 · j/k 移动 · g/G 首尾 · q 退出';
     this.viewport.className = 'pager-window';
     this.content.className = 'pager-content';
     options.renderLines(this.content, lines);
     this.rows = Array.from(this.content.children) as HTMLElement[];
     this.viewport.append(this.content);
-    this.element.append(title, controls, this.status, help, this.viewport);
+    this.element.append(title, controls, this.status, this.viewport);
     output.append(this.element);
     this.element.focus({ preventScroll: true });
     window.scrollTo({ top: 0, behavior: 'instant' });
@@ -166,7 +163,6 @@ export class Pager {
     else if (key === 'G') { event.preventDefault(); this.move(this.lastOffset); }
   }
 
-  get summary(): string { return `${this.options.mode} ${this.options.label} · ${this.status.textContent} · 已退出`; }
   get output(): HTMLElement { return this.options.output; }
 
   dispose(): void {
